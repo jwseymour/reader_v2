@@ -21,6 +21,9 @@
 		B7D7F667B6CA428895A59273 /* ReadingAidsOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DFDA6C5C5C44B2288D0EF0A /* ReadingAidsOverlay.swift */; };
 		522216D2C3CE4AA684A0F29F /* CommandPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86090D3B2BBB40C5B9A20E3F /* CommandPaletteView.swift */; };
 		E73EF46866D24B27992E101D /* DocumentViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C39A28CB91843CE99430E4F /* DocumentViews.swift */; };
+		A1PDFEXT01B01F11E01ADD01 /* PDFExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1PDFEXT01F11E01ADD00001 /* PDFExtractor.swift */; };
+		A1RDFONT01B01F11E01ADD02 /* ReaderFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1RDFONT01F11E01ADD00002 /* ReaderFont.swift */; };
+		A1DOTENV01B01F11E01ADD03 /* DotEnv.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1DOTENV01F11E01ADD00003 /* DotEnv.swift */; };
 		8F8421BBCC1440588482602E /* OFL.txt in Resources */ = {isa = PBXBuildFile; fileRef = A45CEC6B4D314BC295D733B6 /* OFL.txt */; };
 		3AD9E928E5114E72833AB382 /* OpenDyslexic-Regular.otf in Resources */ = {isa = PBXBuildFile; fileRef = 678BA4B543004C65A1DA2CB7 /* OpenDyslexic-Regular.otf */; };
 /* End PBXBuildFile section */
@@ -43,6 +46,9 @@
 		1DFDA6C5C5C44B2288D0EF0A /* ReadingAidsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ReadingAidsOverlay.swift"; sourceTree = "<group>"; };
 		86090D3B2BBB40C5B9A20E3F /* CommandPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CommandPaletteView.swift"; sourceTree = "<group>"; };
 		1C39A28CB91843CE99430E4F /* DocumentViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DocumentViews.swift"; sourceTree = "<group>"; };
+		A1PDFEXT01F11E01ADD00001 /* PDFExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PDFExtractor.swift"; sourceTree = "<group>"; };
+		A1RDFONT01F11E01ADD00002 /* ReaderFont.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ReaderFont.swift"; sourceTree = "<group>"; };
+		A1DOTENV01F11E01ADD00003 /* DotEnv.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DotEnv.swift"; sourceTree = "<group>"; };
 		1C0766F9BD6A4D9CBC09404F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info.plist"; sourceTree = "<group>"; };
 		A45CEC6B4D314BC295D733B6 /* OFL.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "OFL.txt"; sourceTree = "<group>"; };
 		678BA4B543004C65A1DA2CB7 /* OpenDyslexic-Regular.otf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "OpenDyslexic-Regular.otf"; sourceTree = "<group>"; };
@@ -92,6 +98,7 @@
 			isa = PBXGroup;
 			children = (
 				2DF3A2FEE9D745C0ABC4CE1E /* ReaderDocument.swift */,
+				A1PDFEXT01F11E01ADD00001 /* PDFExtractor.swift */,
 			);
 			path = Document;
 			sourceTree = "<group>";
@@ -126,6 +133,7 @@
 		CBC17FC67B1F408895BA7D32 /* Stores */ = {
 			isa = PBXGroup;
 			children = (
+				A1DOTENV01F11E01ADD00003 /* DotEnv.swift */,
 				A77EC722ABAA474AA94778A7 /* PresetStore.swift */,
 				65E3F45B10A344FCB6C84ED3 /* SettingsStore.swift */,
 			);
@@ -145,6 +153,7 @@
 			isa = PBXGroup;
 			children = (
 				7CB11C8F21054476A383D731 /* PaperTheme.swift */,
+				A1RDFONT01F11E01ADD00002 /* ReaderFont.swift */,
 			);
 			path = Theme;
 			sourceTree = "<group>";
@@ -233,6 +242,9 @@
 				B7D7F667B6CA428895A59273 /* ReadingAidsOverlay.swift in Sources */,
 				522216D2C3CE4AA684A0F29F /* CommandPaletteView.swift in Sources */,
 				E73EF46866D24B27992E101D /* DocumentViews.swift in Sources */,
+				A1PDFEXT01B01F11E01ADD01 /* PDFExtractor.swift in Sources */,
+				A1RDFONT01B01F11E01ADD02 /* ReaderFont.swift in Sources */,
+				A1DOTENV01B01F11E01ADD03 /* DotEnv.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

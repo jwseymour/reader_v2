@@ -147,10 +147,11 @@ final class TTSController: ObservableObject {
     }
 
     private func playOpenAI(text: String, voice: String, apiKey: String) async throws {
-        let cacheKey = TTSCache.key(provider: "openai", voice: voice, text: text)
+        let model = SettingsStore.shared.openAITTSModel
+        let cacheKey = TTSCache.key(provider: "openai-\(model)", voice: voice, text: text)
         var data = await cache.data(forKey: cacheKey)
         if data == nil {
-            let client = OpenAITTSClient(apiKey: apiKey, voice: voice)
+            let client = OpenAITTSClient(apiKey: apiKey, voice: voice, model: model)
             data = try await client.synthesize(text: text)
             if let data { await cache.store(data, forKey: cacheKey) }
         }
@@ -192,10 +193,11 @@ final class TTSController: ObservableObject {
             for i in start..<end {
                 for sentence in paragraphs[i].sentences {
                     if Task.isCancelled { return }
-                    let cacheKey = TTSCache.key(provider: "openai", voice: preset.openAIVoice, text: sentence)
+                    let model = SettingsStore.shared.openAITTSModel
+                    let cacheKey = TTSCache.key(provider: "openai-\(model)", voice: preset.openAIVoice, text: sentence)
                     if await cache.data(forKey: cacheKey) != nil { continue }
                     do {
-                        let client = OpenAITTSClient(apiKey: key, voice: preset.openAIVoice)
+                        let client = OpenAITTSClient(apiKey: key, voice: preset.openAIVoice, model: model)
                         let data = try await client.synthesize(text: sentence)
                         await cache.store(data, forKey: cacheKey)
                     } catch {

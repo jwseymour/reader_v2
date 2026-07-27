@@ -28,7 +28,12 @@ final class SettingsStore: ObservableObject {
         didSet { saveAPIKey(openAIAPIKey) }
     }
 
+    /// From .env `OPENAI_TTS_MODEL`, defaulting to high-quality speech.
+    @Published var openAITTSModel: String = "tts-1-hd"
+
     private init() {
+        DotEnv.load()
+
         if let s = defaults.string(forKey: preferredKey) {
             preferredPresetID = UUID(uuidString: s)
         } else {
@@ -38,7 +43,19 @@ final class SettingsStore: ObservableObject {
         if let s = defaults.string(forKey: compareBKey) {
             comparePresetBID = UUID(uuidString: s)
         }
-        openAIAPIKey = loadAPIKey()
+
+        let keychain = loadAPIKey()
+        if !keychain.isEmpty {
+            openAIAPIKey = keychain
+        } else if let envKey = DotEnv.value("OPENAI_API_KEY"), !envKey.isEmpty {
+            openAIAPIKey = envKey
+        } else {
+            openAIAPIKey = ""
+        }
+
+        if let model = DotEnv.value("OPENAI_TTS_MODEL"), !model.isEmpty {
+            openAITTSModel = model
+        }
     }
 
     private func saveAPIKey(_ key: String) {

@@ -34,7 +34,7 @@ actor TTSCache {
 struct OpenAITTSClient {
     var apiKey: String
     var voice: String = "nova"
-    var model: String = "tts-1"
+    var model: String = "tts-1-hd"
 
     func synthesize(text: String) async throws -> Data {
         guard !apiKey.isEmpty else { throw TTSError.noAPIKey }
@@ -109,7 +109,7 @@ enum TTSTextSplitter {
     }
 
     static func paragraphs(from plain: String, pageIndex: Int = 0) -> [TTSParagraph] {
-        paragraphs(from: [ExtractedPage(id: pageIndex, pageIndex: pageIndex, text: plain)])
+        paragraphs(from: [ExtractedPage(id: pageIndex, pageIndex: pageIndex, text: plain, html: "<p></p>")])
     }
 
     private static func make(id: Int, page: Int, text: String) -> TTSParagraph {

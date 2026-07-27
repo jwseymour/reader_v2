@@ -40,29 +40,6 @@ struct ReaderDocument: FileDocument {
     }
 }
 
-struct ExtractedPage: Identifiable, Hashable {
-    let id: Int
-    let pageIndex: Int
-    let text: String
-}
-
-enum PDFExtractor {
-    static func extractPages(from data: Data) -> [ExtractedPage] {
-        guard let doc = PDFDocument(data: data) else { return [] }
-        var pages: [ExtractedPage] = []
-        for i in 0..<doc.pageCount {
-            let text = doc.page(at: i)?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            pages.append(ExtractedPage(id: i, pageIndex: i, text: text))
-        }
-        return pages
-    }
-
-    static func extractionLooksViable(_ pages: [ExtractedPage]) -> Bool {
-        let total = pages.reduce(0) { $0 + $1.text.count }
-        return total > 80
-    }
-}
-
 struct EPUBContent {
     var spineHTMLs: [(title: String, html: String, baseURL: URL)]
     var toc: [(title: String, index: Int)]

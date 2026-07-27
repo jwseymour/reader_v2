@@ -20,9 +20,11 @@ You should see **AccessibleReaderV2** in the menu bar and status bar (not your v
 
 ## Settings / TTS
 
-Menu bar: **AccessibleReaderV2 → Settings…** (⌘,)
+Copy [`.env.example`](../.env.example) to `.env` and set `OPENAI_API_KEY`, or paste the key in **Settings…** / Reading Lab (stored in Keychain).
 
-There is a **Text to Speech** section for the OpenAI API key. TTS play is also on the toolbar ▶ and ⌃Space.
+Speech uses OpenAI’s **Audio Speech API** (`tts-1-hd` by default) — Whisper is speech-to-text and is not used for reading aloud.
+
+TTS play: bottom bar ▶ or ⌃Space.
 
 ## Use with Zotero
 

@@ -64,8 +64,8 @@ struct ReadingPreset: Identifiable, Codable, Equatable, Hashable {
         self.overlayEnabled = false
         self.overlayColorHex = "#F5E6C8"
         self.overlayOpacity = 0.35
-        self.backgroundColorHex = "#F7F1E8"
-        self.textColorHex = "#2C2416"
+        self.backgroundColorHex = "#F4F6F4"
+        self.textColorHex = "#1C241F"
 
         self.brightness = 0
         self.contrast = 0
@@ -79,7 +79,7 @@ struct ReadingPreset: Identifiable, Codable, Equatable, Hashable {
         self.margins = 48
 
         self.fontFamily = "OpenDyslexic"
-        self.fontSize = 20
+        self.fontSize = 16
         self.lineSpacing = 8
         self.paragraphSpacing = 16
         self.characterSpacing = 0.4

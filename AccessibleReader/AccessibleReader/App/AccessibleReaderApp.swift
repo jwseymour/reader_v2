@@ -7,6 +7,7 @@ struct AccessibleReaderApp: App {
     @ObservedObject private var settings = SettingsStore.shared
 
     init() {
+        DotEnv.load()
         Self.registerFonts()
     }
 
@@ -48,14 +49,14 @@ struct AccessibleReaderApp: App {
         Settings {
             Form {
                 Section {
-                    Text("AccessibleReaderV2")
-                        .font(.title2.weight(.semibold))
-                    Text("This is version 2 — not your v1 app.")
+                    Text("Accessible Reader")
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    Text("Personal academic reading environment — v2.")
                         .foregroundStyle(.secondary)
                 }
-                Section("Text to Speech") {
+                Section("Speech") {
                     SecureField("OpenAI API Key", text: $settings.openAIAPIKey)
-                    Toggle("Prefer OpenAI TTS", isOn: Binding(
+                    Toggle("Prefer OpenAI voice", isOn: Binding(
                         get: { presets.activePreset.ttsPreferOpenAI },
                         set: { v in presets.updateActive { $0.ttsPreferOpenAI = v } }
                     ))
@@ -70,16 +71,16 @@ struct AccessibleReaderApp: App {
                         Text("onyx").tag("onyx")
                         Text("shimmer").tag("shimmer")
                     }
-                    Text("If no key is set, macOS voices are used. Play TTS from the toolbar ▶ or ⌃Space.")
+                    Text("Without a key, macOS voices are used. Play from the bottom bar or ⌃Space.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Section("Presets") {
                     if let id = settings.preferredPresetID,
                        let name = presets.presets.first(where: { $0.id == id })?.name {
-                        Text("Preferred default: \(name)")
+                        Text("Default for new papers: \(name)")
                     } else {
-                        Text("No preferred preset yet")
+                        Text("No preferred preset yet — set one in the Reading Lab.")
                     }
                 }
             }
