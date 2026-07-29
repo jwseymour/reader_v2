@@ -308,6 +308,23 @@ struct InspectorPanel: View {
         InspectorSection(title: "Display", icon: "slider.horizontal.3", initiallyExpanded: false) {
             LabeledSlider(label: "Zoom", value: presetBinding.zoomPercent, range: 50...250,
                           display: "\(Int(presets.activePreset.zoomPercent))%")
+            HStack(spacing: 6) {
+                Text("Exact")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(PaperTheme.inkSecondary)
+                TextField("100", value: Binding(
+                    get: { presets.activePreset.zoomPercent },
+                    set: { v in presets.updateActive { $0.zoomPercent = min(250, max(50, v)) } }
+                ), format: .number.precision(.fractionLength(0)))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 64)
+                Text("%")
+                    .font(.system(size: 12))
+                    .foregroundStyle(PaperTheme.inkTertiary)
+                Spacer()
+            }
+            LabeledSlider(label: "Gamma", value: presetBinding.gamma, range: 0.3...2.5,
+                          display: String(format: "%.2f", presets.activePreset.gamma))
             Toggle("Continuous scroll", isOn: presetBinding.continuousScroll)
                 .font(.system(size: 12, weight: .medium))
                 .tint(PaperTheme.accent)
@@ -330,7 +347,16 @@ struct InspectorPanel: View {
                 .tint(PaperTheme.accent)
             SecureField("OpenAI API Key", text: $settings.openAIAPIKey)
                 .textFieldStyle(.roundedBorder)
-            Text("From Keychain or `.env` (OPENAI_API_KEY). OpenAI Audio Speech API.")
+            HStack(spacing: 5) {
+                Image(systemName: settings.apiKeyRejected ? "exclamationmark.triangle.fill" : "key.fill")
+                    .font(.system(size: 9))
+                Text(settings.apiKeyRejected
+                     ? "OpenAI rejected this key — macOS voices in use"
+                     : settings.apiKeySource.label)
+                .font(.system(size: 10))
+            }
+            .foregroundStyle(settings.apiKeyRejected ? PaperTheme.warning : PaperTheme.inkTertiary)
+            Text("`.env.local` / `.env` wins unless you type a key here. OpenAI Audio Speech API.")
                 .font(.system(size: 10))
                 .foregroundStyle(PaperTheme.inkTertiary)
             Picker("Voice", selection: presetBinding.openAIVoice) {
@@ -346,6 +372,46 @@ struct InspectorPanel: View {
             Text("Model: \(settings.openAITTSModel). Play from the bottom bar or ⌃Space.")
                 .font(.system(size: 10))
                 .foregroundStyle(PaperTheme.inkTertiary)
+
+            Divider().opacity(0.5)
+
+            PaperTheme.sectionLabel("Highlight while speaking")
+            Picker("Highlight style", selection: highlightModeBinding) {
+                Text("Whole sentence").tag(TTSHighlightMode.sentence)
+                Text("Moving word window").tag(TTSHighlightMode.wordWindow)
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+
+            if presets.activePreset.effectiveTTSHighlightMode == .wordWindow {
+                Stepper(
+                    "Words around: \(presets.activePreset.effectiveTTSHighlightWindowSize)",
+                    value: highlightWindowBinding,
+                    in: 1...5
+                )
+                .font(.system(size: 12))
+                Text("Highlights the spoken word plus \(presets.activePreset.effectiveTTSHighlightWindowSize) word(s) on each side, moving along as it's read.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(PaperTheme.inkTertiary)
+            } else {
+                Text("Highlights the whole sentence currently being spoken.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(PaperTheme.inkTertiary)
+            }
         }
+    }
+
+    private var highlightModeBinding: Binding<TTSHighlightMode> {
+        Binding(
+            get: { presets.activePreset.effectiveTTSHighlightMode },
+            set: { newValue in presets.updateActive { $0.ttsHighlightMode = newValue } }
+        )
+    }
+
+    private var highlightWindowBinding: Binding<Int> {
+        Binding(
+            get: { presets.activePreset.effectiveTTSHighlightWindowSize },
+            set: { newValue in presets.updateActive { $0.ttsHighlightWindowSize = newValue } }
+        )
     }
 }

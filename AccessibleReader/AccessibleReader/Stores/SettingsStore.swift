@@ -11,6 +11,30 @@ final class SettingsStore: ObservableObject {
     private let compareBKey = "comparePresetBID"
     private let keychainService = "com.jack.AccessibleReaderV2"
     private let keychainAccount = "openai-api-key"
+    private let manualKeyKey = "openAIKeyOverridesEnv"
+
+    /// Where the active OpenAI key came from — surfaced in the inspector so a stale
+    /// Keychain entry can never silently shadow the key in `.env.local`.
+    enum APIKeySource: Equatable {
+        case none
+        case envFile(String)
+        case keychain
+
+        var label: String {
+            switch self {
+            case .none: return "No key configured"
+            case .envFile(let path): return "From \((path as NSString).lastPathComponent)"
+            case .keychain: return "From Keychain"
+            }
+        }
+    }
+
+    @Published private(set) var apiKeySource: APIKeySource = .none
+    /// Set when OpenAI rejects the key, so the UI can say so instead of silently
+    /// falling back to macOS voices.
+    @Published var apiKeyRejected = false
+
+    private var isBootstrapping = true
 
     @Published var preferredPresetID: UUID? {
         didSet { defaults.set(preferredPresetID?.uuidString, forKey: preferredKey) }
@@ -25,7 +49,23 @@ final class SettingsStore: ObservableObject {
     }
 
     @Published var openAIAPIKey: String = "" {
-        didSet { saveAPIKey(openAIAPIKey) }
+        didSet {
+            guard !isBootstrapping, openAIAPIKey != oldValue else { return }
+            saveAPIKey(openAIAPIKey)
+            apiKeyRejected = false
+            // A key typed by hand that differs from `.env` is an explicit override;
+            // remember that so it survives relaunch instead of losing to the file.
+            let envKey = DotEnv.fileValue("OPENAI_API_KEY")
+            let overrides = !openAIAPIKey.isEmpty && openAIAPIKey != envKey
+            defaults.set(overrides, forKey: manualKeyKey)
+            if openAIAPIKey.isEmpty {
+                apiKeySource = .none
+            } else if overrides {
+                apiKeySource = .keychain
+            } else {
+                apiKeySource = .envFile(DotEnv.loadedPath ?? ".env")
+            }
+        }
     }
 
     /// From .env `OPENAI_TTS_MODEL`, defaulting to high-quality speech.
@@ -44,18 +84,47 @@ final class SettingsStore: ObservableObject {
             comparePresetBID = UUID(uuidString: s)
         }
 
+        // `.env` wins over the Keychain unless a key was typed in by hand. The old
+        // order let a revoked Keychain entry shadow a fresh key in the file forever.
         let keychain = loadAPIKey()
-        if !keychain.isEmpty {
+        let envKey = DotEnv.fileValue("OPENAI_API_KEY")
+        let manualOverride = defaults.bool(forKey: manualKeyKey)
+
+        if manualOverride, !keychain.isEmpty {
             openAIAPIKey = keychain
-        } else if let envKey = DotEnv.value("OPENAI_API_KEY"), !envKey.isEmpty {
+            apiKeySource = .keychain
+        } else if let envKey {
             openAIAPIKey = envKey
+            apiKeySource = .envFile(DotEnv.loadedPath ?? ".env")
+        } else if !keychain.isEmpty {
+            openAIAPIKey = keychain
+            apiKeySource = .keychain
         } else {
             openAIAPIKey = ""
+            apiKeySource = .none
         }
 
         if let model = DotEnv.value("OPENAI_TTS_MODEL"), !model.isEmpty {
             openAITTSModel = model
         }
+        isBootstrapping = false
+    }
+
+    /// Called when OpenAI rejects the current key (401). If a *different* key is
+    /// sitting in `.env`, switch to it and report that a retry is worthwhile.
+    @discardableResult
+    func handleRejectedKey() -> Bool {
+        apiKeyRejected = true
+        guard case .keychain = apiKeySource,
+              let envKey = DotEnv.fileValue("OPENAI_API_KEY"),
+              envKey != openAIAPIKey else {
+            return false
+        }
+        defaults.set(false, forKey: manualKeyKey)
+        openAIAPIKey = envKey
+        apiKeySource = .envFile(DotEnv.loadedPath ?? ".env")
+        apiKeyRejected = false
+        return true
     }
 
     private func saveAPIKey(_ key: String) {

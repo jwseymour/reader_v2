@@ -129,9 +129,16 @@ private struct MouseYTracker: NSViewRepresentable {
                 NSEvent.removeMonitor(monitor)
                 self.monitor = nil
             }
-            guard window != nil else { return }
+            guard let window else { return }
+            // Without this, NSWindow never delivers .mouseMoved at all and the
+            // focus band cannot follow the pointer.
+            window.acceptsMouseMovedEvents = true
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
-                guard let self else { return event }
+                guard let self, let ownWindow = self.window else { return event }
+                // Local monitors are app-wide. locationInWindow is relative to the
+                // event's own window, so converting an event from another window
+                // would drag this window's focus band to a meaningless position.
+                guard event.window === ownWindow else { return event }
                 let point = self.convert(event.locationInWindow, from: nil)
                 if self.bounds.contains(point) {
                     self.onUpdate?(point.y)

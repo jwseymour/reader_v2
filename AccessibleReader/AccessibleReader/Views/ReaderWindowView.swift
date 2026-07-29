@@ -10,6 +10,7 @@ struct ReaderWindowView: View {
     @ObservedObject private var presets = PresetStore.shared
     @ObservedObject private var settings = SettingsStore.shared
     @StateObject private var tts = TTSController()
+    @StateObject private var selection = ReaderSelection()
 
     @State private var showInspector = false
     @State private var showOriginalPDF = false
@@ -17,9 +18,13 @@ struct ReaderWindowView: View {
     @State private var showThumbnails = false
     @State private var showSearch = false
     @State private var searchQuery = ""
+    @State private var search = SearchCommand()
+    @State private var fitMode: PDFFitMode = .manual
+    @State private var window: NSWindow?
+    @FocusState private var searchFocused: Bool
     @State private var currentPage = 0
-    @State private var selectedText = ""
     @State private var focusY: CGFloat = 0
+    @State private var focusYB: CGFloat = 0
     @State private var extractedPages: [ExtractedPage] = []
     @State private var extractionFailed = false
     @State private var epub: EPUBContent?
@@ -29,6 +34,7 @@ struct ReaderWindowView: View {
     @State private var compareMode: CompareMode = .off
     @State private var abIsB = false
     @State private var showPalette = false
+    @State private var showShortcutsGuide = false
     @State private var jumpPage: Int?
 
     enum CompareMode { case off, sideBySide }
@@ -60,7 +66,9 @@ struct ReaderWindowView: View {
             if compareMode == .sideBySide, let bid = settings.comparePresetBID,
                let bPreset = presets.presets.first(where: { $0.id == bid }) {
                 Rectangle().fill(PaperTheme.strokeStrong).frame(width: 1)
-                readingSurface(preset: bPreset)
+                // Pane B gets the full aid stack too — comparing overlays and focus
+                // combinations is the whole point of side-by-side.
+                surfaceWithAids(preset: bPreset, focus: $focusYB)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
@@ -89,20 +97,17 @@ struct ReaderWindowView: View {
             if showPalette {
                 Color.black.opacity(0.28).ignoresSafeArea()
                     .onTapGesture { showPalette = false }
-                CommandPaletteView(isPresented: $showPalette, actions: paletteActions)
+                CommandPaletteView(isPresented: $showPalette, items: paletteItems)
             }
         }
         .toolbar { toolbarContent }
         .onAppear(perform: bootstrap)
         .onChange(of: displayPreset.ttsSpeed) { _, v in tts.speed = v }
-        .onReceive(NotificationCenter.default.publisher(for: .toggleInspector)) { _ in
-            withAnimation(.easeInOut(duration: 0.2)) { showInspector.toggle() }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .toggleTTS)) { _ in
-            toggleTTS()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .rewindTTS)) { _ in
-            tts.rewindTenSeconds()
+        .onReceive(NotificationCenter.default.publisher(for: .readerCommand)) { note in
+            guard let command = note.object as? ReaderCommand else { return }
+            // Menu commands broadcast to every window; only the focused paper acts.
+            guard window == nil || window?.isKeyWindow == true else { return }
+            handle(command)
         }
         .onChange(of: showOriginalPDF) { _, _ in
             preserveReadingPosition()
@@ -113,34 +118,35 @@ struct ReaderWindowView: View {
         )) {
             FirstRunView(presets: presets, settings: settings)
         }
-        .background(KeyCaptureView { key in
-            handleKey(key)
-        })
-        .focusable()
-        .onKeyPress(keys: [.init("1"), .init("2"), .init("3"), .init("4"), .init("5"),
-                           .init("6"), .init("7"), .init("8"), .init("9")]) { press in
-            if let n = Int(press.characters) {
-                presets.activateSlot(n)
-                return .handled
-            }
-            return .ignored
+        .sheet(isPresented: $showShortcutsGuide) {
+            ShortcutsGuideView()
         }
+        .background(KeyCaptureView(onEvent: { event in
+            handleKeyEvent(event)
+        }, onWindow: { w in
+            window = w
+        }))
     }
 
     private var mainReadingColumn: some View {
         VStack(spacing: 0) {
             topChrome
-            ZStack {
-                readingSurface(preset: displayPreset)
-                ReadingAidsOverlay(preset: displayPreset, focusY: $focusY)
-                    .allowsHitTesting(displayPreset.rulerEnabled)
-            }
-            .saturation(1 + displayPreset.saturation)
-            .brightness(displayPreset.brightness)
-            .contrast(1 + displayPreset.contrast)
+            surfaceWithAids(preset: displayPreset, focus: $focusY)
             bottomChrome
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// A reading surface with the full combinable aid stack on top of it.
+    private func surfaceWithAids(preset: ReadingPreset, focus: Binding<CGFloat>) -> some View {
+        ZStack {
+            readingSurface(preset: preset)
+            ReadingAidsOverlay(preset: preset, focusY: focus)
+                .allowsHitTesting(preset.rulerEnabled)
+        }
+        .saturation(1 + preset.saturation)
+        .brightness(preset.brightness)
+        .contrast(1 + preset.contrast)
     }
 
     // MARK: - Chrome
@@ -203,8 +209,7 @@ struct ReaderWindowView: View {
     private var pageIndicator: some View {
         HStack(spacing: 8) {
             Button {
-                currentPage = max(0, currentPage - 1)
-                jumpPage = currentPage
+                goToPage(currentPage - 1)
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 11, weight: .semibold))
@@ -218,9 +223,7 @@ struct ReaderWindowView: View {
                 .foregroundStyle(PaperTheme.ink)
 
             Button {
-                let maxP = maxPageIndex
-                currentPage = min(maxP, currentPage + 1)
-                jumpPage = currentPage
+                goToPage(currentPage + 1)
             } label: {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
@@ -384,7 +387,10 @@ struct ReaderWindowView: View {
                     data: document.data,
                     preset: preset,
                     currentPage: $currentPage,
-                    goToPage: jumpPage
+                    goToPage: jumpPage,
+                    selection: selection,
+                    search: search,
+                    fitMode: fitMode
                 )
                 .onChange(of: jumpPage) { _, _ in jumpPage = nil }
             } else {
@@ -392,9 +398,10 @@ struct ReaderWindowView: View {
                     pages: extractedPages,
                     preset: preset,
                     currentPage: $currentPage,
-                    highlightSentence: tts.currentSentence,
-                    selectedText: $selectedText,
-                    goToPage: jumpPage
+                    highlightSentence: tts.currentHighlight,
+                    selection: selection,
+                    goToPage: jumpPage,
+                    search: search
                 )
                 .onChange(of: jumpPage) { _, _ in jumpPage = nil }
             }
@@ -405,7 +412,9 @@ struct ReaderWindowView: View {
                     html: ch.html,
                     baseURL: ch.baseURL,
                     preset: preset,
-                    highlightSentence: tts.currentSentence
+                    highlightSentence: tts.currentHighlight,
+                    selection: selection,
+                    search: search
                 )
             } else {
                 ContentUnavailableView("Could not load EPUB", systemImage: "book.closed")
@@ -415,7 +424,9 @@ struct ReaderWindowView: View {
                 html: htmlString,
                 baseURL: htmlBase ?? fileURL?.deletingLastPathComponent(),
                 preset: preset,
-                highlightSentence: tts.currentSentence
+                highlightSentence: tts.currentHighlight,
+                selection: selection,
+                search: search
             )
         }
     }
@@ -433,10 +444,24 @@ struct ReaderWindowView: View {
             TextField("Find in document", text: $searchQuery)
                 .textFieldStyle(.plain)
                 .frame(maxWidth: 320)
-            Button("Find") { find(searchQuery) }
-                .buttonStyle(.borderedProminent)
-                .tint(PaperTheme.accent)
-                .controlSize(.small)
+                .focused($searchFocused)
+                .onSubmit { find(searchQuery, forward: true) }
+            Button {
+                find(searchQuery, forward: false)
+            } label: {
+                Image(systemName: "chevron.up").font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Previous match (⌘⇧G)")
+            Button {
+                find(searchQuery, forward: true)
+            } label: {
+                Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Next match (⌘G)")
             Button("Done") { showSearch = false }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -552,35 +577,44 @@ struct ReaderWindowView: View {
         }
     }
 
-    private var paletteActions: [(title: String, action: () -> Void)] {
-        [
-            ("Toggle Reading Lab", { withAnimation { showInspector.toggle() } }),
-            ("Toggle Overlay", { presets.updateActive { $0.overlayEnabled.toggle() } }),
-            ("Toggle Ruler", { presets.updateActive { $0.rulerEnabled.toggle() } }),
-            ("Toggle Line Focus", { presets.updateActive { $0.lineFocusEnabled.toggle() } }),
-            ("Toggle Dim Surround", { presets.updateActive { $0.dimSurroundEnabled.toggle() } }),
-            ("Toggle Page Focus", { presets.updateActive { $0.pageFocusEnabled.toggle() } }),
-            ("Toggle Original PDF", { showOriginalPDF.toggle() }),
-            ("Play / Pause Speech", { toggleTTS() }),
-            ("Rewind Speech 10s", { tts.rewindTenSeconds() }),
-            ("Speech Faster", { tts.adjustSpeed(0.1); presets.updateActive { $0.ttsSpeed = tts.speed } }),
-            ("Speech Slower", { tts.adjustSpeed(-0.1); presets.updateActive { $0.ttsSpeed = tts.speed } }),
-            ("Search", { showSearch = true }),
-            ("A/B Compare Toggle", { abIsB.toggle() }),
-            ("Side-by-Side Compare", { compareMode = compareMode == .sideBySide ? .off : .sideBySide }),
-            ("Set Compare Preset B = Active", { settings.comparePresetBID = presets.activePresetID }),
-            ("Export Active Preset", { exportActivePreset() }),
-            ("Import Preset…", { importPreset() })
-        ]
+    /// Every command the palette can run, grouped and sorted to match
+    /// `ReaderShortcuts.bindings` — the same table `handleKeyEvent` dispatches
+    /// from — so every shown shortcut is one the keyboard actually recognizes,
+    /// and the palette can never list an action under a key combo that doesn't
+    /// really trigger it. A handful of actions (preset import/export, etc.) have
+    /// no keyboard shortcut and are appended after with `shortcut: nil`.
+    private var paletteItems: [CommandPaletteItem] {
+        var seenLabels = Set<String>()
+        var items: [CommandPaletteItem] = []
+        for binding in ReaderShortcuts.bindings where !seenLabels.contains(binding.label) {
+            seenLabels.insert(binding.label)
+            items.append(CommandPaletteItem(
+                title: binding.label,
+                group: binding.group,
+                shortcut: binding.symbol,
+                action: { handle(binding.command) }
+            ))
+        }
+        items.append(contentsOf: [
+            CommandPaletteItem(title: "Set Compare Preset B = Active", group: "Presets & Compare", shortcut: nil) {
+                settings.comparePresetBID = presets.activePresetID
+            },
+            CommandPaletteItem(title: "Export Active Preset", group: "Presets & Compare", shortcut: nil) {
+                exportActivePreset()
+            },
+            CommandPaletteItem(title: "Import Preset…", group: "Presets & Compare", shortcut: nil) {
+                importPreset()
+            }
+        ])
+        return items
     }
 
     private func bootstrap() {
         if let preferred = settings.preferredPresetID {
             presets.activate(preferred)
         }
-        if let voice = DotEnv.value("OPENAI_TTS_VOICE"), !voice.isEmpty {
-            presets.updateActive { $0.openAIVoice = voice }
-        }
+        // OPENAI_TTS_VOICE used to be written into the active preset on every open,
+        // silently overwriting whatever voice had been chosen in the inspector.
         tts.speed = presets.activePreset.ttsSpeed
         tts.useOpenAI = presets.activePreset.ttsPreferOpenAI
 
@@ -623,49 +657,98 @@ struct ReaderWindowView: View {
     private func toggleTTS() {
         tts.speed = displayPreset.ttsSpeed
         tts.useOpenAI = displayPreset.ttsPreferOpenAI
-        let selection = liveSelectedText()
-        if tts.isPlaying {
-            tts.pause()
-        } else {
-            tts.playFromSelection(selection.isEmpty ? nil : selection, currentPage: currentPage)
+        tts.togglePlayPause(selection: selection.text, currentPage: currentPage)
+    }
+
+    private func handle(_ command: ReaderCommand) {
+        switch command {
+        case .toggleInspector:
+            withAnimation(.easeInOut(duration: 0.2)) { showInspector.toggle() }
+        case .commandPalette: showPalette = true
+        case .toggleTTS: toggleTTS()
+        case .rewindTTS: tts.rewindTenSeconds()
+        case .speedUp: changeSpeed(0.1)
+        case .speedDown: changeSpeed(-0.1)
+        case .toggleOverlay: presets.updateActive { $0.overlayEnabled.toggle() }
+        case .toggleRuler: presets.updateActive { $0.rulerEnabled.toggle() }
+        case .toggleLineFocus: presets.updateActive { $0.lineFocusEnabled.toggle() }
+        case .toggleDimSurround: presets.updateActive { $0.dimSurroundEnabled.toggle() }
+        case .togglePageFocus: presets.updateActive { $0.pageFocusEnabled.toggle() }
+        case .overlayOpacityUp: adjustOverlayOpacity(0.05)
+        case .overlayOpacityDown: adjustOverlayOpacity(-0.05)
+        case .zoomIn: setZoom(displayPreset.zoomPercent + 10)
+        case .zoomOut: setZoom(displayPreset.zoomPercent - 10)
+        case .zoomReset: setZoom(100)
+        case .fitWidth: fitMode = .fitWidth
+        case .fitPage: fitMode = .fitPage
+        case .toggleTOC: withAnimation { showTOC.toggle() }
+        case .toggleThumbnails: withAnimation { showThumbnails.toggle() }
+        case .toggleOriginalPDF: if kind == .pdf { showOriginalPDF.toggle() }
+        case .find:
+            showSearch = true
+            searchFocused = true
+        case .findNext: find(searchQuery, forward: true)
+        case .findPrevious: find(searchQuery, forward: false)
+        case .nextPage: goToPage(currentPage + 1)
+        case .previousPage: goToPage(currentPage - 1)
+        case .toggleAB: abIsB.toggle()
+        case .toggleSideBySide:
+            compareMode = compareMode == .sideBySide ? .off : .sideBySide
+        case .rulerNudgeUp: focusY = max(20, focusY - 20)
+        case .rulerNudgeDown: focusY += 20
+        case .toggleShortcutsGuide: showShortcutsGuide = true
         }
     }
 
-    private func liveSelectedText() -> String {
-        if let tv = NSApp.keyWindow?.firstResponder as? NSTextView {
-            let str = tv.string as NSString
-            if let range = tv.selectedRanges.first as? NSRange, range.length > 0 {
-                return str.substring(with: range)
-            }
-        }
-        return selectedText
+    private func changeSpeed(_ delta: Double) {
+        tts.adjustSpeed(delta)
+        presets.updateActive { $0.ttsSpeed = tts.speed }
     }
 
-    private func handleKey(_ event: NSEvent) {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard flags.isEmpty || flags == .shift else { return }
-        switch event.charactersIgnoringModifiers {
-        case "=":
-            presets.updateActive { $0.overlayOpacity = min(0.85, $0.overlayOpacity + 0.05) }
-        case "-":
-            presets.updateActive { $0.overlayOpacity = max(0, $0.overlayOpacity - 0.05) }
-        case "j":
-            focusY += 20
-        case "k":
-            focusY = max(20, focusY - 20)
-        default:
-            break
+    private func adjustOverlayOpacity(_ delta: Double) {
+        presets.updateActive {
+            $0.overlayOpacity = min(0.85, max(0, $0.overlayOpacity + delta))
+            if delta > 0 { $0.overlayEnabled = true }
         }
     }
 
-    private func find(_ query: String) {
-        guard !query.isEmpty else { return }
-        if kind == .pdf, !showOriginalPDF {
-            if let page = extractedPages.first(where: { $0.text.localizedCaseInsensitiveContains(query) }) {
-                currentPage = page.pageIndex
-                jumpPage = page.pageIndex
-            }
+    private func setZoom(_ percent: Double) {
+        fitMode = .manual
+        presets.updateActive { $0.zoomPercent = min(250, max(50, percent)) }
+    }
+
+    private func goToPage(_ page: Int) {
+        let clamped = min(maxPageIndex, max(0, page))
+        currentPage = clamped
+        jumpPage = clamped
+    }
+
+    /// The single entry point for every keyboard shortcut in the app. Runs inside
+    /// `KeyCaptureView`'s pre-dispatch event monitor, so it fires reliably no
+    /// matter which subview (`WKWebView`, `PDFView`) currently has focus.
+    /// Returns `true` when the event was recognized and should be consumed.
+    private func handleKeyEvent(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if flags.isEmpty, let chars = event.charactersIgnoringModifiers, let n = Int(chars), (1...9).contains(n) {
+            presets.activateSlot(n)
+            return true
         }
+        if flags == .command, let chars = event.charactersIgnoringModifiers, let n = Int(chars), (1...9).contains(n) {
+            presets.activateSlot(n)
+            return true
+        }
+        guard let binding = ReaderShortcuts.match(event) else { return false }
+        handle(binding.command)
+        return true
+    }
+
+    /// Search runs inside the reading surface itself, so it works for the extracted
+    /// text, the visual PDF, EPUB and HTML alike, with next/previous and wrapping.
+    private func find(_ query: String, forward: Bool) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if !showSearch { showSearch = true }
+        search = SearchCommand(query: trimmed, forward: forward, counter: search.counter + 1)
     }
 
     private func exportActivePreset() {

@@ -20,11 +20,18 @@ You should see **AccessibleReaderV2** in the menu bar and status bar (not your v
 
 ## Settings / TTS
 
-Copy [`.env.example`](../.env.example) to `.env` and set `OPENAI_API_KEY`, or paste the key in **Settings…** / Reading Lab (stored in Keychain).
+Copy [`.env.example`](../.env.example) to `.env.local` (or `.env`) and set `OPENAI_API_KEY`.
+
+Key resolution order:
+
+1. `.env.local`, then `.env` — **wins by default**
+2. Keychain — used when there is no key in a file, or when you type one into **Settings…** / Reading Lab (typing a key marks it as an explicit override that survives relaunch)
+
+The Reading Lab shows which source is live, and says so plainly if OpenAI rejects the key instead of quietly dropping to macOS voices. Both `.env` files are gitignored.
 
 Speech uses OpenAI’s **Audio Speech API** (`tts-1-hd` by default) — Whisper is speech-to-text and is not used for reading aloud.
 
-TTS play: bottom bar ▶ or ⌃Space.
+TTS play: bottom bar ▶ or ⌃Space. Select text first to start from the selection; play/pause resumes where it stopped.
 
 ## Use with Zotero
 
@@ -50,12 +57,27 @@ Create your preferred preset (defaults lean toward line focus + dim surround, Op
 
 OpenAI key: **Settings…** or the inspector TTS section (stored in Keychain).
 
-## Shortcuts (highlights)
+## Shortcuts
 
-- `⌘I` — inspector  
-- `⌃Space` — TTS play/pause  
-- `⌘⇧R` — TTS rewind ~10s  
-- `⌘1`–`⌘9` — presets  
-- `=` / `-` — overlay opacity (when not typing)  
-- `j` / `k` — move ruler  
-- Command palette via toolbar  
+| Key | Action |
+|---|---|
+| `⌘I` | Reading Lab (inspector) |
+| `⌘K` | Command palette |
+| `⌘1`–`⌘9` | Presets (bare `1`–`9` also work) |
+| `⌘F` / `⌘G` / `⌘⇧G` | Find / next / previous |
+| `⌘←` / `⌘→` | Previous / next page |
+| `⌘⇧E` | Original ⇄ reflow PDF |
+| `⌘+` / `⌘-` / `⌘0` | Zoom in / out / actual size |
+| `⌘⇧9` / `⌘⇧8` | Fit width / fit page |
+| `⌘⌥T` / `⌘⌥P` | Contents / thumbnails |
+| `⌘⇧O` | Overlay on/off |
+| `⌘]` / `⌘[` | Overlay stronger / weaker |
+| `⌘⇧L` / `⌘⇧J` / `⌘⇧D` / `⌘⇧U` | Ruler / line focus / dim surround / page focus |
+| `⌃Space` | TTS play/pause |
+| `⌘⇧R` | TTS rewind ~10s |
+| `⌘.` / `⌘⇧,` | Speech faster / slower |
+| `⌘⇧B` / `⌘\` | A/B compare / side-by-side |
+| `=` / `-` | Overlay opacity (when not typing) |
+| `j` / `k` | Move ruler |
+
+Full screen is the standard macOS `⌃⌘F`.  

@@ -31,41 +31,63 @@ enum DotEnv {
         if let env = ProcessInfo.processInfo.environment[key], !env.isEmpty {
             return env
         }
-        let loaded = load()
-        let v = loaded[key]
+        return fileValue(key)
+    }
+
+    /// Value straight from the `.env` file, ignoring the process environment.
+    /// `load()` mirrors file values into the process environment via `setenv`,
+    /// so this is the only way to tell where a value actually came from.
+    static func fileValue(_ key: String) -> String? {
+        let v = load()[key]
         return (v?.isEmpty == false) ? v : nil
     }
 
+    /// Path of the file that `load()` last read, for showing the key's origin in the UI.
+    private(set) static var loadedPath: String?
+
+    /// `.env.local` takes precedence over `.env` in the same directory, matching the
+    /// usual convention: `.env` is the shared/checked-in shape, `.env.local` is yours.
+    private static let fileNames = [".env.local", ".env"]
+
     private static func firstExistingURL() -> URL? {
-        var candidates: [URL] = []
+        var directories: [URL] = []
 
         // Next to the app / project when launched from Xcode
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        candidates.append(cwd.appendingPathComponent(".env"))
-        candidates.append(cwd.appendingPathComponent("../.env"))
-        candidates.append(cwd.appendingPathComponent("../../.env"))
+        directories.append(cwd)
+        directories.append(cwd.appendingPathComponent(".."))
+        directories.append(cwd.appendingPathComponent("../.."))
 
         // Repo-style locations relative to the bundle
         let bundle = Bundle.main.bundleURL
-        candidates.append(bundle.appendingPathComponent(".env"))
-        candidates.append(bundle.deletingLastPathComponent().appendingPathComponent(".env"))
-        // …/AccessibleReader.app/Contents/MacOS → walk up looking for reader_v2/.env
+        directories.append(bundle)
+        directories.append(bundle.deletingLastPathComponent())
+        // …/AccessibleReader.app/Contents/MacOS → walk up looking for the repo root
         var walk = bundle
         for _ in 0..<8 {
             walk = walk.deletingLastPathComponent()
-            candidates.append(walk.appendingPathComponent(".env"))
-            candidates.append(walk.appendingPathComponent("reader_v2/.env"))
+            directories.append(walk)
+            directories.append(walk.appendingPathComponent("reader_v2"))
         }
 
         // Application Support
         if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            candidates.append(appSupport.appendingPathComponent("AccessibleReader/.env"))
+            directories.append(appSupport.appendingPathComponent("AccessibleReader"))
         }
 
         // Workspace path used in development
-        candidates.append(URL(fileURLWithPath: NSString(string: "~/jack_code/reader_v2/.env").expandingTildeInPath))
+        directories.append(URL(fileURLWithPath: NSString(string: "~/jack_code/reader_v2").expandingTildeInPath))
 
         let fm = FileManager.default
-        return candidates.first { fm.fileExists(atPath: $0.path) }
+        for dir in directories {
+            for name in fileNames {
+                let url = dir.appendingPathComponent(name)
+                if fm.fileExists(atPath: url.path) {
+                    loadedPath = url.standardizedFileURL.path
+                    return url
+                }
+            }
+        }
+        return nil
     }
 }

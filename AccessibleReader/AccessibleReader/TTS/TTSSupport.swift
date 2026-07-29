@@ -50,7 +50,13 @@ struct OpenAITTSClient {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        guard let http = response as? HTTPURLResponse else {
+            throw TTSError.apiFailed("No response from OpenAI")
+        }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw TTSError.unauthorized
+        }
+        guard (200..<300).contains(http.statusCode) else {
             throw TTSError.apiFailed(String(data: data, encoding: .utf8) ?? "TTS request failed")
         }
         return data
@@ -59,15 +65,32 @@ struct OpenAITTSClient {
 
 enum TTSError: LocalizedError {
     case noAPIKey
+    case unauthorized
     case apiFailed(String)
     case emptyText
 
     var errorDescription: String? {
         switch self {
         case .noAPIKey: return "OpenAI API key not configured"
+        case .unauthorized: return "OpenAI rejected the API key"
         case .apiFailed(let m): return m
         case .emptyText: return "Nothing to speak"
         }
+    }
+}
+
+/// Live text selection from whichever reading surface is on screen.
+///
+/// The reading surfaces are `WKWebView` and `PDFView`, neither of which is an
+/// `NSTextView`, so the selection has to be pushed here by each surface rather
+/// than pulled off the first responder.
+@MainActor
+final class ReaderSelection: ObservableObject {
+    @Published var text: String = ""
+
+    func update(_ value: String?) {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed != text { text = trimmed }
     }
 }
 

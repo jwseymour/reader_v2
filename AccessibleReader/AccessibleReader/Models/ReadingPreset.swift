@@ -52,6 +52,11 @@ struct ReadingPreset: Identifiable, Codable, Equatable, Hashable {
     var ttsPreferOpenAI: Bool
     var openAIVoice: String
 
+    // Speech highlight (Lab). Optional so presets saved before this existed
+    // still decode — see `effectiveTTSHighlightMode` / `effectiveTTSHighlightWindowSize`.
+    var ttsHighlightMode: TTSHighlightMode?
+    var ttsHighlightWindowSize: Int?
+
     init(
         id: UUID = UUID(),
         name: String = "Untitled",
@@ -101,6 +106,8 @@ struct ReadingPreset: Identifiable, Codable, Equatable, Hashable {
         self.ttsSpeed = 1.0
         self.ttsPreferOpenAI = true
         self.openAIVoice = "nova"
+        self.ttsHighlightMode = .sentence
+        self.ttsHighlightWindowSize = 2
     }
 
     static var starter: ReadingPreset {
@@ -110,11 +117,22 @@ struct ReadingPreset: Identifiable, Codable, Equatable, Hashable {
     }
 }
 
+/// Where a spoken paragraph's highlight follows the voice.
+enum TTSHighlightMode: String, Codable, CaseIterable, Hashable {
+    /// Highlights the whole sentence currently being spoken.
+    case sentence
+    /// Highlights just the word being spoken plus a couple words either side,
+    /// moving along as playback progresses.
+    case wordWindow
+}
+
 extension ReadingPreset {
     var overlayColor: Color { Color(hex: overlayColorHex) ?? .yellow }
     var backgroundColor: Color { Color(hex: backgroundColorHex) ?? Color(red: 0.97, green: 0.95, blue: 0.91) }
     var textColor: Color { Color(hex: textColorHex) ?? .primary }
     var rulerColor: Color { Color(hex: rulerColorHex) ?? .brown }
+    var effectiveTTSHighlightMode: TTSHighlightMode { ttsHighlightMode ?? .sentence }
+    var effectiveTTSHighlightWindowSize: Int { ttsHighlightWindowSize ?? 2 }
 }
 
 extension Color {
