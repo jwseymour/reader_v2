@@ -175,7 +175,7 @@ struct PDFVisualView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(currentPage: $currentPage) }
 
-    final class Coordinator: NSObject, PDFViewDelegate {
+    final class Coordinator: NSObject, PDFViewDelegate, NSPopoverDelegate {
         @Binding var currentPage: Int
         var selection: ReaderSelection?
         var lastSearch = SearchCommand()
@@ -187,6 +187,13 @@ struct PDFVisualView: NSViewRepresentable {
         var lastTTSHighlight: String = ""
         private var editorPopover: NSPopover?
         private var openEditorAnnotationID: UUID?
+        // Anchor (page-space rect + the page/view it's relative to) for the
+        // currently-open editor popover, re-converted to view space and
+        // re-applied on every scroll — see `handleScrollBoundsChange`.
+        private var openEditorPage: PDFPage?
+        private var openEditorLineRect: CGRect?
+        private weak var openEditorView: PDFView?
+        private weak var observedClipView: NSView?
 
         init(currentPage: Binding<Int>) { _currentPage = currentPage }
 
@@ -330,10 +337,10 @@ struct PDFVisualView: NSViewRepresentable {
             guard let page = view.page(for: point, nearest: false) else { return }
             let pagePoint = view.convert(point, to: page)
             guard let hit = PDFHighlightRendering.managedAnnotation(at: pagePoint, on: page),
-                  let id = PDFHighlightRendering.recordID(for: hit),
+                  let id = PDFHighlightRendering.recordID(for: hit.annotation),
                   let record = lastAnnotations.first(where: { $0.id == id })
             else { return }
-            showEditor(for: record, near: hit.bounds, on: page, in: view)
+            showEditor(for: record, near: hit.lineRect, on: page, in: view)
         }
 
         private func showEditor(for record: PDFHighlightAnnotation, near pageBounds: CGRect, on page: PDFPage, in view: PDFView) {
@@ -344,21 +351,71 @@ struct PDFVisualView: NSViewRepresentable {
                 onSave: { [weak self] updated in
                     self?.onEditHighlight?(updated)
                     self?.editorPopover?.close()
-                    self?.openEditorAnnotationID = nil
                 },
                 onDelete: { [weak self] in
                     self?.onDeleteHighlight?(record.id)
                     self?.editorPopover?.close()
-                    self?.openEditorAnnotationID = nil
                 }
             )
             let controller = NSHostingController(rootView: editor)
             let popover = NSPopover()
             popover.contentViewController = controller
             popover.behavior = .transient
+            popover.delegate = self
             popover.show(relativeTo: anchorRect, of: view, preferredEdge: .maxY)
             editorPopover = popover
             openEditorAnnotationID = record.id
+            openEditorPage = page
+            openEditorLineRect = pageBounds
+            openEditorView = view
+            observeScrolling(of: view)
+        }
+
+        /// Registers for the PDF's internal scroll-view bounds changes so the
+        /// open editor popover can be re-anchored as the user scrolls —
+        /// `NSPopover` only tracks its anchor view's own frame, not content
+        /// scrolling *inside* that view, so without this the popover stayed
+        /// glued to its on-screen position while the highlight it belonged to
+        /// scrolled away underneath it. Safe to call repeatedly: it's a no-op
+        /// once already observing the current clip view, and re-subscribes if
+        /// `view` ever gets a new one (e.g. after a display-mode change).
+        private func observeScrolling(of view: PDFView) {
+            guard let clipView = view.documentView?.enclosingScrollView?.contentView,
+                  clipView !== observedClipView
+            else { return }
+            if let old = observedClipView {
+                NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: old)
+            }
+            clipView.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(handleScrollBoundsChange(_:)),
+                name: NSView.boundsDidChangeNotification,
+                object: clipView
+            )
+            observedClipView = clipView
+        }
+
+        @objc private func handleScrollBoundsChange(_ note: Notification) {
+            guard editorPopover != nil,
+                  let page = openEditorPage,
+                  let lineRect = openEditorLineRect,
+                  let view = openEditorView
+            else { return }
+            let anchorRect = view.convert(lineRect, from: page)
+            editorPopover?.show(relativeTo: anchorRect, of: view, preferredEdge: .maxY)
+        }
+
+        /// Catches every dismissal path — Delete/Done closing it explicitly,
+        /// but also the `.transient` behavior's own auto-close on an outside
+        /// click — so stale state can never cause a later scroll event to
+        /// reopen a popover the user already dismissed.
+        func popoverDidClose(_ notification: Notification) {
+            editorPopover = nil
+            openEditorAnnotationID = nil
+            openEditorPage = nil
+            openEditorLineRect = nil
+            openEditorView = nil
         }
     }
 }
@@ -372,6 +429,11 @@ struct HighlightEditorView: View {
 
     @State private var comment: String
     @State private var colorHex: String
+    @State private var kind: PDFAnnotationKind
+    @State private var tags: [String]
+    @State private var newTag: String = ""
+
+    private static let popoverWidth: CGFloat = 260
 
     init(annotation: PDFHighlightAnnotation, onSave: @escaping (PDFHighlightAnnotation) -> Void, onDelete: @escaping () -> Void) {
         self.annotation = annotation
@@ -379,41 +441,140 @@ struct HighlightEditorView: View {
         self.onDelete = onDelete
         _comment = State(initialValue: annotation.comment)
         _colorHex = State(initialValue: annotation.color)
+        _kind = State(initialValue: annotation.kind)
+        _tags = State(initialValue: annotation.tags)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                ForEach(HighlightSwatches.all) { swatch in
-                    Circle()
-                        .fill(Color(hex: swatch.hex) ?? .yellow)
-                        .frame(width: 22, height: 22)
-                        .overlay(
-                            Circle().strokeBorder(
-                                PaperTheme.accent,
-                                lineWidth: colorHex.uppercased() == swatch.hex.uppercased() ? 2.5 : 0
-                            )
-                        )
-                        .onTapGesture { colorHex = swatch.hex }
+                Picker("", selection: $kind) {
+                    Image(systemName: "highlighter").tag(PDFAnnotationKind.highlight)
+                    Image(systemName: "underline").tag(PDFAnnotationKind.underline)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 84)
+                Spacer()
+                if let pageLabel = annotation.pageLabel {
+                    Text("Page \(pageLabel)")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(PaperTheme.inkTertiary)
                 }
             }
-            TextEditor(text: $comment)
-                .font(.system(size: 12))
-                .frame(width: 220, height: 70)
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(PaperTheme.stroke, lineWidth: 1))
+            HStack(spacing: 8) {
+                ForEach(HighlightSwatches.all) { swatch in
+                    swatchButton(swatch)
+                }
+            }
+            ZStack(alignment: .topLeading) {
+                if comment.isEmpty {
+                    Text("Add a note…")
+                        .font(.system(size: 12))
+                        .foregroundStyle(PaperTheme.inkTertiary)
+                        .padding(.top, 8)
+                        .padding(.leading, 5)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $comment)
+                    .font(.system(size: 12))
+                    .foregroundStyle(PaperTheme.ink)
+                    .scrollContentBackground(.hidden)
+                    .padding(4)
+            }
+            .frame(height: 64)
+            .background(RoundedRectangle(cornerRadius: 7).fill(PaperTheme.panel))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(PaperTheme.stroke, lineWidth: 1))
+            tagsSection
             HStack {
-                Button("Delete", role: .destructive, action: onDelete)
+                Button(action: onDelete) {
+                    Label("Delete", systemImage: "trash")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.red.opacity(0.8))
                 Spacer()
                 Button("Done") {
                     var updated = annotation
                     updated.comment = comment
                     updated.color = colorHex
+                    updated.kind = kind
+                    updated.tags = tags
                     onSave(updated)
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .tint(PaperTheme.accent)
             }
         }
-        .padding(14)
+        .padding(16)
+        .frame(width: Self.popoverWidth)
+        .background(PaperTheme.elevated)
+    }
+
+    private var tagsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !tags.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(tags, id: \.self) { tag in
+                            HStack(spacing: 4) {
+                                Text(tag).font(.system(size: 11))
+                                Button {
+                                    tags.removeAll { $0 == tag }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 10))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(PaperTheme.accentSoft))
+                            .foregroundStyle(PaperTheme.accent)
+                        }
+                    }
+                }
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "tag")
+                    .font(.system(size: 11))
+                    .foregroundStyle(PaperTheme.inkTertiary)
+                TextField("Add tag…", text: $newTag)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .onSubmit(addTag)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 6).fill(PaperTheme.panel))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(PaperTheme.stroke, lineWidth: 1))
+        }
+    }
+
+    private func addTag() {
+        let trimmed = newTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        newTag = ""
+        guard !trimmed.isEmpty, !tags.contains(trimmed) else { return }
+        tags.append(trimmed)
+    }
+
+    private func swatchButton(_ swatch: HighlightSwatch) -> some View {
+        let selected = colorHex.uppercased() == swatch.hex.uppercased()
+        return Circle()
+            .fill(Color(hex: swatch.hex) ?? .yellow)
+            .frame(width: 20, height: 20)
+            .overlay(Circle().strokeBorder(PaperTheme.ink.opacity(0.25), lineWidth: 0.5))
+            .overlay(
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .opacity(selected ? 1 : 0)
+            )
+            .scaleEffect(selected ? 1.15 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: colorHex)
+            .onTapGesture { colorHex = swatch.hex }
+            .help(swatch.name)
     }
 }
 

@@ -84,13 +84,21 @@ struct ZoteroClient {
     /// the batch POST endpoint: PATCH on the single-item endpoint is the only one that
     /// supports a partial body — sending a full-item POST would overwrite fields this
     /// app never touches (e.g. a tag added directly in Zotero).
-    func updateAnnotation(userID: Int, key: String, version: Int, comment: String, color: String) async throws -> Int {
+    func updateAnnotation(
+        userID: Int, key: String, version: Int, comment: String, color: String,
+        type: String, tags: [String]
+    ) async throws -> Int {
         var request = URLRequest(url: URL(string: "\(Self.base)/users/\(userID)/items/\(key)")!)
         request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(String(version), forHTTPHeaderField: "If-Unmodified-Since-Version")
         authorize(&request)
-        let body: [String: Any] = ["annotationComment": comment, "annotationColor": color.lowercased()]
+        let body: [String: Any] = [
+            "annotationComment": comment,
+            "annotationColor": color.lowercased(),
+            "annotationType": type,
+            "tags": tags.map { ["tag": $0] }
+        ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await send(request)
         try checkStatus(response, data: data, currentVersionFor: key)

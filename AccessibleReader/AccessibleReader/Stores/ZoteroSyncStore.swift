@@ -111,7 +111,8 @@ final class ZoteroSyncStore: ObservableObject {
         status = .syncing
         do {
             let newVersion = try await client.updateAnnotation(
-                userID: userID, key: key, version: version, comment: record.comment, color: record.color
+                userID: userID, key: key, version: version, comment: record.comment, color: record.color,
+                type: record.kind.rawValue, tags: record.tags
             )
             var updated = record
             updated.zoteroVersion = newVersion
@@ -146,7 +147,8 @@ final class ZoteroSyncStore: ObservableObject {
         do {
             let fresh = try await client.fetchAnnotation(userID: userID, key: key)
             let newVersion = try await client.updateAnnotation(
-                userID: userID, key: key, version: fresh.version, comment: record.comment, color: record.color
+                userID: userID, key: key, version: fresh.version, comment: record.comment, color: record.color,
+                type: record.kind.rawValue, tags: record.tags
             )
             var updated = record
             updated.zoteroVersion = newVersion
@@ -200,6 +202,8 @@ final class ZoteroSyncStore: ObservableObject {
             var updated = existing
             updated.comment = item.data.annotationComment ?? updated.comment
             updated.color = item.data.annotationColor ?? updated.color
+            updated.kind = item.data.annotationType.flatMap(PDFAnnotationKind.init(rawValue:)) ?? updated.kind
+            updated.tags = item.data.tags?.map(\.tag) ?? updated.tags
             updated.zoteroVersion = item.version
             store.update(updated)
             lastRemoteChangeIDs.insert(existing.id)
@@ -214,6 +218,8 @@ final class ZoteroSyncStore: ObservableObject {
             matchText: item.data.annotationText ?? "",
             comment: item.data.annotationComment ?? "",
             color: item.data.annotationColor ?? HighlightSwatches.defaultHex,
+            kind: item.data.annotationType.flatMap(PDFAnnotationKind.init(rawValue:)) ?? .highlight,
+            tags: item.data.tags?.map(\.tag) ?? [],
             rects: position.rects,
             zoteroItemKey: item.key,
             zoteroVersion: item.version,

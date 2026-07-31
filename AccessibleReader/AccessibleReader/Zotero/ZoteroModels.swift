@@ -22,7 +22,7 @@ struct ZoteroAnnotationPayload: Encodable {
     var annotationPageLabel: String
     var annotationSortIndex: String
     var annotationPosition: String
-    var tags: [String] = []
+    var tags: [ZoteroTag] = []
 
     enum CodingKeys: String, CodingKey {
         case key, itemType, parentItem, annotationType, annotationText, annotationComment,
@@ -43,6 +43,14 @@ struct ZoteroAnnotationPayload: Encodable {
         try c.encode(annotationPosition, forKey: .annotationPosition)
         try c.encode(tags, forKey: .tags)
     }
+}
+
+/// Zotero's actual wire shape for a tag on an item — a bare string (this app's
+/// earlier `tags: [String]` payload) is rejected by the API, which expects
+/// `{"tag": "name"}` objects. `type` is omitted: Zotero defaults an untyped tag to
+/// a manual (not automatic) tag, which is what a user typing one here means.
+struct ZoteroTag: Codable, Equatable {
+    var tag: String
 }
 
 /// A `annotationPosition`-shaped payload, JSON-encoded once, then embedded as a
@@ -67,6 +75,7 @@ struct ZoteroAnnotationItem: Decodable {
         var annotationColor: String?
         var annotationPageLabel: String?
         var annotationPosition: String?
+        var tags: [ZoteroTag]?
     }
 
     /// Decoded `pageIndex`/`rects` out of the double-encoded `annotationPosition` string.
@@ -141,12 +150,14 @@ extension PDFHighlightAnnotation {
         let sortIndex = String(format: "%05d|%06d|00000", pageIndex, Int(yOffset))
         return ZoteroAnnotationPayload(
             parentItem: parentItem,
+            annotationType: kind.rawValue,
             annotationText: matchText,
             annotationComment: comment,
             annotationColor: color.lowercased(),
             annotationPageLabel: pageLabel ?? String(pageIndex + 1),
             annotationSortIndex: sortIndex,
-            annotationPosition: positionString
+            annotationPosition: positionString,
+            tags: tags.map(ZoteroTag.init(tag:))
         )
     }
 }

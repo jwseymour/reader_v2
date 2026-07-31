@@ -125,6 +125,12 @@ struct InspectorPanel: View {
                                         .foregroundStyle(PaperTheme.inkTertiary)
                                         .lineLimit(2)
                                 }
+                                if !annotation.tags.isEmpty {
+                                    Text(annotation.tags.joined(separator: " · "))
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundStyle(PaperTheme.accent)
+                                        .lineLimit(1)
+                                }
                                 Button("Page \(annotation.pageIndex + 1)") {
                                     onJumpToAnnotation(annotation.pageIndex)
                                 }

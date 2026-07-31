@@ -9,6 +9,15 @@ import AppKit
 /// this is no longer just a naming convention: these fields map directly onto a
 /// real Zotero `annotation` item. The one-way "Export Highlights to PDF" bridge in
 /// `ReaderWindowView` still exists as a fallback for documents not linked to Zotero.
+/// Mirrors Zotero's own `annotationType` values exactly (see `PDFHighlightAnnotation.kind`)
+/// — deliberately not including a "strikeout" case: Zotero's schema has no equivalent
+/// annotation type, so a local-only strikeout would have nowhere faithful to round-trip
+/// to and was left out rather than silently mis-mapped to one of these on sync.
+enum PDFAnnotationKind: String, Codable {
+    case highlight
+    case underline
+}
+
 struct PDFHighlightAnnotation: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     /// `fileURL.standardizedFileURL.path` — a plain string so
@@ -28,6 +37,11 @@ struct PDFHighlightAnnotation: Identifiable, Codable, Equatable {
     var comment: String
     /// Hex color, e.g. "#FFD400".
     var color: String
+    /// "highlight" (default) or "underline" — matches Zotero's `annotationType`.
+    var kind: PDFAnnotationKind = .highlight
+    /// Plain tag names (Zotero's own `{"tag": name}` object shape is added only at
+    /// since nothing local needs the tag "type" (manual vs automatic) Zotero tracks.
+    var tags: [String] = []
     /// Page-space rects (one per line the original selection spanned),
     /// captured directly from `PDFSelection` at creation time. Confirmed
     /// (session verification, see ZoteroClient) to use the same bottom-left-origin,
@@ -57,11 +71,17 @@ struct HighlightSwatch: Identifiable {
 /// highlight's color reads the same after an eventual round trip through
 /// Zotero's Import Annotations.
 enum HighlightSwatches {
+    /// Zotero's full default annotation color set (its reader's own color picker),
+    /// so every color survives a round trip through Zotero unchanged.
     static let all: [HighlightSwatch] = [
         .init(name: "Yellow", hex: "#FFD400"),
+        .init(name: "Red", hex: "#FF6666"),
         .init(name: "Green", hex: "#5FB236"),
         .init(name: "Blue", hex: "#2EA8E5"),
-        .init(name: "Red", hex: "#FF6666")
+        .init(name: "Purple", hex: "#A28AE5"),
+        .init(name: "Magenta", hex: "#E56EEE"),
+        .init(name: "Orange", hex: "#F19837"),
+        .init(name: "Gray", hex: "#AAAAAA")
     ]
     static let defaultHex = "#FFD400"
 }
@@ -116,7 +136,10 @@ enum PDFHighlightRendering {
     /// stored geometry). Not attached to a page — the caller does that.
     static func buildAnnotation(for record: PDFHighlightAnnotation, rects: [CGRect]) -> PDFAnnotation {
         let union = rects.dropFirst().reduce(rects[0]) { $0.union($1) }
-        let annotation = PDFAnnotation(bounds: union, forType: .highlight, withProperties: nil)
+        // Highlight and underline are both markup annotations (PDF spec) that place
+        // via the same `quadrilateralPoints` — only the subtype differs.
+        let subtype: PDFAnnotationSubtype = record.kind == .underline ? .underline : .highlight
+        let annotation = PDFAnnotation(bounds: union, forType: subtype, withProperties: nil)
         annotation.color = NSColor(hex: record.color) ?? .yellow
         var quads: [NSValue] = []
         // `quadrilateralPoints` is documented (PDFAnnotationUtilities.h) as
@@ -175,17 +198,22 @@ enum PDFHighlightRendering {
         return unplaced
     }
 
-    /// This app's own annotation at `point` (page space) on `page`, if any.
-    /// Tests against the actual per-line quads, not just `annotation.bounds`
-    /// — for a highlight spanning lines of very different widths, the union
-    /// bounding box covers empty space the eye doesn't read as highlighted,
-    /// which made clicks well away from any actual highlighted text register
-    /// as a hit.
-    static func managedAnnotation(at point: CGPoint, on page: PDFPage) -> PDFAnnotation? {
-        page.annotations.first { annotation in
-            guard annotation.value(forAnnotationKey: annotationKey) != nil else { return false }
+    /// This app's own annotation at `point` (page space) on `page`, if any,
+    /// along with the specific line-quad rect (page space) that was actually
+    /// hit. Tests against the actual per-line quads, not just
+    /// `annotation.bounds` — for a highlight spanning lines of very
+    /// different widths, the union bounding box covers empty space the eye
+    /// doesn't read as highlighted, which made clicks well away from any
+    /// actual highlighted text register as a hit. Returning the specific
+    /// line (rather than the union) also matters for the caller: anchoring
+    /// the comment popover to the whole multi-line union put it far from
+    /// wherever the click actually landed.
+    static func managedAnnotation(at point: CGPoint, on page: PDFPage) -> (annotation: PDFAnnotation, lineRect: CGRect)? {
+        for annotation in page.annotations {
+            guard annotation.value(forAnnotationKey: annotationKey) != nil else { continue }
             guard let quads = annotation.quadrilateralPoints, !quads.isEmpty else {
-                return annotation.bounds.contains(point)
+                if annotation.bounds.contains(point) { return (annotation, annotation.bounds) }
+                continue
             }
             // Quad points are relative to the annotation's bounds origin
             // (same convention `buildAnnotation` writes them in) — shift back
@@ -199,11 +227,11 @@ enum PDFHighlightRendering {
                     x: min(tl.x, bl.x), y: min(bl.y, br.y),
                     width: max(tr.x, br.x) - min(tl.x, bl.x), height: max(tl.y, tr.y) - min(bl.y, br.y)
                 )
-                if rect.contains(point) { return true }
+                if rect.contains(point) { return (annotation, rect) }
                 index += 4
             }
-            return false
         }
+        return nil
     }
 
     static func recordID(for annotation: PDFAnnotation) -> UUID? {
