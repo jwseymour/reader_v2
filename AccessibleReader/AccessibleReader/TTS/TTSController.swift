@@ -11,7 +11,6 @@ final class TTSController: ObservableObject {
     @Published var currentParagraphID: Int?
     @Published var speed: Double = 1.0
     @Published var statusMessage: String = ""
-    @Published var useOpenAI: Bool = true
 
     /// The whole document. Playback always reads from here; `paragraphIndex` is
     /// the read pointer — where the next Play press starts from. It defaults to
@@ -45,7 +44,6 @@ final class TTSController: ObservableObject {
     /// Bumped on every new utterance so results from a superseded async synthesis
     /// can be discarded instead of hijacking playback after a stop or a skip.
     private var generation = 0
-    private var openAIDisabledForSession = false
 
     init() {
         let bridge = SpeechBridge()
@@ -174,6 +172,7 @@ final class TTSController: ObservableObject {
             pointerOffset = match.offset
         }
         isPlaying = true
+        statusMessage = ""
         if let player = audioPlayer {
             player.play()
             if let para = effectiveParagraph(at: paragraphIndex) {
@@ -244,43 +243,51 @@ final class TTSController: ObservableObject {
         generation += 1
         let token = generation
         let preset = PresetStore.shared.activePreset
-        let preferOpenAI = useOpenAI && preset.ttsPreferOpenAI && !openAIDisabledForSession
 
-        Task {
-            if preferOpenAI, !SettingsStore.shared.openAIAPIKey.isEmpty {
-                if await attemptOpenAI(paragraph: para, voice: preset.openAIVoice, token: token) {
-                    prefetchAhead()
-                    return
-                }
+        if preset.ttsPreferOpenAI {
+            guard !SettingsStore.shared.openAIAPIKey.isEmpty else {
+                statusMessage = "OpenAI TTS needs an API key — add one in Speech settings, or switch to macOS (Free)"
+                isPlaying = false
+                return
             }
-            guard token == generation, isPlaying else { return }
+            Task {
+                await attemptOpenAI(paragraph: para, voice: preset.openAIVoice, token: token)
+            }
+        } else {
             playMacOS(paragraph: para)
             prefetchAhead()
         }
     }
 
-    private func attemptOpenAI(paragraph: TTSParagraph, voice: String, token: Int) async -> Bool {
+    /// Speaks `paragraph` via the OpenAI engine. The user explicitly chose this
+    /// engine, so a failure pauses playback with a clear error rather than
+    /// silently switching to the macOS voice — that switch would be surprising
+    /// and easy to miss.
+    private func attemptOpenAI(paragraph: TTSParagraph, voice: String, token: Int) async {
         do {
             try await playOpenAI(paragraph: paragraph, voice: voice,
                                  apiKey: SettingsStore.shared.openAIAPIKey, token: token)
-            return true
+            statusMessage = ""
+            prefetchAhead()
         } catch TTSError.unauthorized {
             // A revoked key in the Keychain can be superseded by a fresh one in
-            // `.env` — swap and retry once before giving up on OpenAI.
+            // `.env` — swap and retry once before surfacing the error.
             if SettingsStore.shared.handleRejectedKey() {
                 do {
                     try await playOpenAI(paragraph: paragraph, voice: voice,
                                          apiKey: SettingsStore.shared.openAIAPIKey, token: token)
                     statusMessage = ""
-                    return true
+                    prefetchAhead()
+                    return
                 } catch {}
             }
-            openAIDisabledForSession = true
-            statusMessage = "OpenAI rejected the API key — using macOS voice"
-            return false
+            guard token == generation else { return }
+            statusMessage = "OpenAI rejected the API key — playback paused"
+            isPlaying = false
         } catch {
-            statusMessage = "OpenAI TTS failed — using macOS voice"
-            return false
+            guard token == generation else { return }
+            statusMessage = "OpenAI TTS failed — playback paused"
+            isPlaying = false
         }
     }
 
@@ -430,7 +437,7 @@ final class TTSController: ObservableObject {
             guard start < end else { return }
             let preset = PresetStore.shared.activePreset
             let key = SettingsStore.shared.openAIAPIKey
-            guard preset.ttsPreferOpenAI, !key.isEmpty, !openAIDisabledForSession else { return }
+            guard preset.ttsPreferOpenAI, !key.isEmpty else { return }
             let model = SettingsStore.shared.openAITTSModel
             for i in start..<end {
                 if Task.isCancelled { return }

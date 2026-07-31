@@ -137,7 +137,7 @@ struct CommandPaletteView: View {
 struct ShortcutsGuideView: View {
     @Environment(\.dismiss) private var dismiss
 
-    private static let groupOrder = ["General", "Navigation", "Zoom & View", "Reading Aids", "Speech", "Presets & Compare"]
+    private static let groupOrder = ["General", "Navigation", "Zoom & View", "Reading Aids", "Speech", "Annotations", "Presets & Compare"]
 
     private var sections: [(group: String, bindings: [KeyBinding])] {
         var byGroup: [String: [KeyBinding]] = [:]

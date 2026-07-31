@@ -36,6 +36,8 @@ enum ReaderCommand: String {
     case toggleSideBySide
     case commandPalette
     case toggleShortcutsGuide
+    case addHighlight
+    case exportHighlightsToPDF
 }
 
 extension Notification.Name {
@@ -142,6 +144,9 @@ enum ReaderShortcuts {
         KeyBinding(.speedUp, "Speech Faster", group: "Speech", symbol: "⌘.", character: ".", cmd: true),
         KeyBinding(.speedDown, "Speech Slower", group: "Speech", symbol: "⌘⇧,", character: "<", cmd: true, shift: true),
 
+        // Annotations
+        KeyBinding(.addHighlight, "Add Highlight", group: "Annotations", symbol: "⌘⇧H", character: "H", cmd: true, shift: true),
+
         // Presets & Compare — digit presets are handled separately (any of 1–9)
         KeyBinding(.toggleAB, "A/B Compare", group: "Presets & Compare", symbol: "⌘⇧B", character: "B", cmd: true, shift: true),
         KeyBinding(.toggleSideBySide, "Side-by-Side Compare", group: "Presets & Compare", symbol: "⌘\\", character: "\\", cmd: true)
@@ -157,6 +162,7 @@ enum ReaderShortcuts {
 struct AccessibleReaderApp: App {
     @ObservedObject private var presets = PresetStore.shared
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var zoteroSync = ZoteroSyncStore.shared
 
     init() {
         DotEnv.load()
@@ -248,6 +254,14 @@ struct AccessibleReaderApp: App {
                     .keyboardShortcut("\\", modifiers: [.command])
                 Divider()
 
+                Button("Add Highlight") { postReaderCommand(.addHighlight) }
+                    .keyboardShortcut("h", modifiers: [.command, .shift])
+                // Deliberately no keyboard shortcut: this rewrites the source
+                // PDF file on disk, so it should only be reachable by a
+                // deliberate click/palette command, never a stray key chord.
+                Button("Export Highlights to PDF…") { postReaderCommand(.exportHighlightsToPDF) }
+                Divider()
+
                 ForEach(1...9, id: \.self) { n in
                     Button("Preset \(n)") {
                         PresetStore.shared.activateSlot(n)
@@ -289,6 +303,15 @@ struct AccessibleReaderApp: App {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                Section("Zotero") {
+                    SecureField("Zotero API Key", text: $settings.zoteroAPIKey)
+                    Text(zoteroStatusLabel)
+                        .font(.caption)
+                        .foregroundStyle(settings.zoteroAPIKeyRejected ? Color.red : .secondary)
+                    Text("Create a key with library read/write access at zotero.org/settings/keys. Highlights made here sync live to your Zotero library once a PDF is linked (Inspector → Highlights).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Section("Presets") {
                     if let id = settings.preferredPresetID,
                        let name = presets.presets.first(where: { $0.id == id })?.name {
@@ -300,6 +323,18 @@ struct AccessibleReaderApp: App {
             }
             .frame(width: 460, height: 400)
             .padding()
+        }
+    }
+
+    private var zoteroStatusLabel: String {
+        if settings.zoteroAPIKey.isEmpty { return "No key configured" }
+        switch zoteroSync.status {
+        case .notConfigured: return "No key configured"
+        case .idle, .syncing:
+            if let userID = zoteroSync.userID { return "Connected (user \(userID))" }
+            return "Connecting…"
+        case .offline: return "Offline — will retry"
+        case .error(let message): return message
         }
     }
 

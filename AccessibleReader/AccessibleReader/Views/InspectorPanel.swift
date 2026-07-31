@@ -5,8 +5,20 @@ import UniformTypeIdentifiers
 struct InspectorPanel: View {
     @ObservedObject var presets: PresetStore
     @ObservedObject var settings: SettingsStore
+    @ObservedObject var zoteroSync: ZoteroSyncStore
+    @ObservedObject var zoteroLinks: ZoteroLinkStore
     @Binding var showOriginalPDF: Bool
     var kind: DocumentKind
+    var documentKey: String?
+    var annotations: [PDFHighlightAnnotation] = []
+    var onJumpToAnnotation: (Int) -> Void = { _ in }
+    var onDeleteAnnotation: (UUID) -> Void = { _ in }
+    var onExportRequested: () -> Void = {}
+    @State private var showLinkPicker = false
+
+    private var zoteroLink: ZoteroDocumentLink? {
+        documentKey.flatMap { zoteroLinks.link(for: $0) }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -15,6 +27,7 @@ struct InspectorPanel: View {
                 VStack(alignment: .leading, spacing: 12) {
                     if kind == .pdf {
                         pdfModeSection
+                        annotationsSection
                     }
                     presetSection
                     overlaySection
@@ -80,6 +93,120 @@ struct InspectorPanel: View {
                 .font(.system(size: 11))
                 .foregroundStyle(PaperTheme.inkTertiary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Highlights created in Original PDF mode (⌘⇧H on a text selection). Live-synced
+    /// to Zotero via `ZoteroSyncStore` once this document is linked (`zoteroStatusRow`);
+    /// the "Export Highlights to PDF" bridge is a fallback for documents that aren't.
+    private var annotationsSection: some View {
+        InspectorSection(title: "Highlights", icon: "highlighter", initiallyExpanded: false) {
+            zoteroStatusRow
+            if annotations.isEmpty {
+                Text("Select text in Original PDF mode and press ⌘⇧H to add a highlight.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(PaperTheme.inkTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(annotations) { annotation in
+                        HStack(alignment: .top, spacing: 8) {
+                            Circle()
+                                .fill(Color(hex: annotation.color) ?? .yellow)
+                                .frame(width: 10, height: 10)
+                                .padding(.top, 3)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(annotation.matchText)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .lineLimit(2)
+                                if !annotation.comment.isEmpty {
+                                    Text(annotation.comment)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(PaperTheme.inkTertiary)
+                                        .lineLimit(2)
+                                }
+                                Button("Page \(annotation.pageIndex + 1)") {
+                                    onJumpToAnnotation(annotation.pageIndex)
+                                }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(PaperTheme.accent)
+                            }
+                            Spacer(minLength: 0)
+                            Button {
+                                onDeleteAnnotation(annotation.id)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(PaperTheme.inkTertiary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(PaperTheme.mist)
+                        )
+                    }
+                }
+
+                if zoteroLink == nil {
+                    Button("Export Highlights to PDF…", action: onExportRequested)
+                        .buttonStyle(.bordered)
+                        .tint(PaperTheme.accent)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var zoteroStatusRow: some View {
+        HStack(spacing: 6) {
+            if let link = zoteroLink {
+                Circle().fill(zoteroStatusColor).frame(width: 7, height: 7)
+                Text(zoteroStatusText(linkedVia: link.resolvedVia))
+                    .font(.system(size: 11))
+                    .foregroundStyle(PaperTheme.inkTertiary)
+            } else {
+                Text("Not linked to Zotero")
+                    .font(.system(size: 11))
+                    .foregroundStyle(PaperTheme.inkTertiary)
+                Spacer(minLength: 0)
+                Button("Link to Zotero…") { showLinkPicker = true }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(PaperTheme.accent)
+            }
+        }
+        .padding(.bottom, 4)
+        .sheet(isPresented: $showLinkPicker) {
+            if let documentKey {
+                ZoteroLinkPickerView(documentKey: documentKey) { attachmentKey in
+                    zoteroLinks.setLink(ZoteroDocumentLink(
+                        documentKey: documentKey,
+                        libraryID: zoteroSync.userID ?? 0,
+                        attachmentItemKey: attachmentKey,
+                        resolvedVia: "manual"
+                    ))
+                }
+            }
+        }
+    }
+
+    private var zoteroStatusColor: Color {
+        switch zoteroSync.status {
+        case .error, .offline: return .red
+        case .syncing: return .yellow
+        default: return .green
+        }
+    }
+
+    private func zoteroStatusText(linkedVia: String) -> String {
+        switch zoteroSync.status {
+        case .syncing: return "Syncing with Zotero…"
+        case .offline: return "Zotero offline — will retry"
+        case .error(let message): return message
+        default: return "Synced with Zotero"
         }
     }
 
@@ -342,34 +469,48 @@ struct InspectorPanel: View {
 
     private var ttsSection: some View {
         InspectorSection(title: "Speech", icon: "speaker.wave.2", initiallyExpanded: false) {
-            Toggle("Prefer OpenAI TTS", isOn: presetBinding.ttsPreferOpenAI)
-                .font(.system(size: 12, weight: .medium))
-                .tint(PaperTheme.accent)
-            SecureField("OpenAI API Key", text: $settings.openAIAPIKey)
-                .textFieldStyle(.roundedBorder)
-            HStack(spacing: 5) {
-                Image(systemName: settings.apiKeyRejected ? "exclamationmark.triangle.fill" : "key.fill")
-                    .font(.system(size: 9))
-                Text(settings.apiKeyRejected
-                     ? "OpenAI rejected this key — macOS voices in use"
-                     : settings.apiKeySource.label)
-                .font(.system(size: 10))
+            PaperTheme.sectionLabel("Voice engine")
+            Picker("Voice Engine", selection: presetBinding.ttsPreferOpenAI) {
+                Text("OpenAI").tag(true)
+                Text("macOS (Free)").tag(false)
             }
-            .foregroundStyle(settings.apiKeyRejected ? PaperTheme.warning : PaperTheme.inkTertiary)
-            Text("`.env.local` / `.env` wins unless you type a key here. OpenAI Audio Speech API.")
-                .font(.system(size: 10))
-                .foregroundStyle(PaperTheme.inkTertiary)
-            Picker("Voice", selection: presetBinding.openAIVoice) {
-                Text("nova").tag("nova")
-                Text("alloy").tag("alloy")
-                Text("echo").tag("echo")
-                Text("fable").tag("fable")
-                Text("onyx").tag("onyx")
-                Text("shimmer").tag("shimmer")
+            .labelsHidden()
+            .pickerStyle(.segmented)
+
+            if presets.activePreset.ttsPreferOpenAI {
+                SecureField("OpenAI API Key", text: $settings.openAIAPIKey)
+                    .textFieldStyle(.roundedBorder)
+                HStack(spacing: 5) {
+                    Image(systemName: settings.apiKeyRejected ? "exclamationmark.triangle.fill" : "key.fill")
+                        .font(.system(size: 9))
+                    Text(settings.apiKeyRejected
+                         ? "OpenAI rejected this key"
+                         : settings.apiKeySource.label)
+                    .font(.system(size: 10))
+                }
+                .foregroundStyle(settings.apiKeyRejected ? PaperTheme.warning : PaperTheme.inkTertiary)
+                Text("`.env.local` / `.env` wins unless you type a key here. OpenAI Audio Speech API. If a request fails, playback pauses with an error rather than silently switching engines.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(PaperTheme.inkTertiary)
+                Picker("Voice", selection: presetBinding.openAIVoice) {
+                    Text("nova").tag("nova")
+                    Text("alloy").tag("alloy")
+                    Text("echo").tag("echo")
+                    Text("fable").tag("fable")
+                    Text("onyx").tag("onyx")
+                    Text("shimmer").tag("shimmer")
+                }
+                Text("Model: \(settings.openAITTSModel).")
+                    .font(.system(size: 10))
+                    .foregroundStyle(PaperTheme.inkTertiary)
+            } else {
+                Text("Uses the built-in macOS voice — no API key or network needed.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(PaperTheme.inkTertiary)
             }
             LabeledSlider(label: "Speed", value: presetBinding.ttsSpeed, range: 0.5...2.5,
                           display: String(format: "%.2f×", presets.activePreset.ttsSpeed))
-            Text("Model: \(settings.openAITTSModel). Play from the bottom bar or ⌃Space.")
+            Text("Play from the bottom bar or ⌃Space.")
                 .font(.system(size: 10))
                 .foregroundStyle(PaperTheme.inkTertiary)
 
@@ -398,6 +539,17 @@ struct InspectorPanel: View {
                     .font(.system(size: 10))
                     .foregroundStyle(PaperTheme.inkTertiary)
             }
+
+            Divider().opacity(0.5)
+
+            Toggle("Follow along (auto-scroll)", isOn: autoScrollBinding)
+                .font(.system(size: 12, weight: .medium))
+                .tint(PaperTheme.accent)
+            Text(presets.activePreset.effectiveTTSAutoScrollEnabled
+                 ? "The page scrolls to keep the spoken text in view."
+                 : "Scrolling is independent — the page won't jump while it reads.")
+                .font(.system(size: 10))
+                .foregroundStyle(PaperTheme.inkTertiary)
         }
     }
 
@@ -412,6 +564,13 @@ struct InspectorPanel: View {
         Binding(
             get: { presets.activePreset.effectiveTTSHighlightWindowSize },
             set: { newValue in presets.updateActive { $0.ttsHighlightWindowSize = newValue } }
+        )
+    }
+
+    private var autoScrollBinding: Binding<Bool> {
+        Binding(
+            get: { presets.activePreset.effectiveTTSAutoScrollEnabled },
+            set: { newValue in presets.updateActive { $0.ttsAutoScrollEnabled = newValue } }
         )
     }
 }

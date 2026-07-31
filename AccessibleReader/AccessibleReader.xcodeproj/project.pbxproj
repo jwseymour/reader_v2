@@ -24,6 +24,15 @@
 		A1PDFEXT01B01F11E01ADD01 /* PDFExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1PDFEXT01F11E01ADD00001 /* PDFExtractor.swift */; };
 		A1RDFONT01B01F11E01ADD02 /* ReaderFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1RDFONT01F11E01ADD00002 /* ReaderFont.swift */; };
 		A1DOTENV01B01F11E01ADD03 /* DotEnv.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1DOTENV01F11E01ADD00003 /* DotEnv.swift */; };
+		A1PDFHLA01B01F11E01ADD04 /* PDFHighlightAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1PDFHLA01F11E01ADD00004 /* PDFHighlightAnnotation.swift */; };
+		A1ANOSTR01B01F11E01ADD05 /* AnnotationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1ANOSTR01F11E01ADD00005 /* AnnotationStore.swift */; };
+		22F1F0502ACDEDD3C99215FA /* ZoteroModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21AA934B009668FD710E2D0 /* ZoteroModels.swift */; };
+		4CB4C5364ED6563E2E6A01B0 /* ZoteroStorageResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB6CFA76945731E358556D8F /* ZoteroStorageResolver.swift */; };
+		725111760C0260E0F6A5DC7A /* ZoteroClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB57A96A8324D4F0E3709727 /* ZoteroClient.swift */; };
+		9B402C8599CF97A0A2F3B888 /* ZoteroLinkStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E4CC5B794770C73F97674EA /* ZoteroLinkStore.swift */; };
+		A15A5CE5D00DB8355BA47034 /* ZoteroSyncStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19383E74C73459ABBC3ADC0E /* ZoteroSyncStore.swift */; };
+		A2775E630C58D59315207D4E /* ZoteroStreamingClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C900C2A9E26A0D123F60917A /* ZoteroStreamingClient.swift */; };
+		3BF0A999505E70C6955CE58A /* ZoteroLinkPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A0E533E9968DE031530EF4 /* ZoteroLinkPickerView.swift */; };
 		8F8421BBCC1440588482602E /* OFL.txt in Resources */ = {isa = PBXBuildFile; fileRef = A45CEC6B4D314BC295D733B6 /* OFL.txt */; };
 		3AD9E928E5114E72833AB382 /* OpenDyslexic-Regular.otf in Resources */ = {isa = PBXBuildFile; fileRef = 678BA4B543004C65A1DA2CB7 /* OpenDyslexic-Regular.otf */; };
 /* End PBXBuildFile section */
@@ -49,6 +58,15 @@
 		A1PDFEXT01F11E01ADD00001 /* PDFExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PDFExtractor.swift"; sourceTree = "<group>"; };
 		A1RDFONT01F11E01ADD00002 /* ReaderFont.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ReaderFont.swift"; sourceTree = "<group>"; };
 		A1DOTENV01F11E01ADD00003 /* DotEnv.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DotEnv.swift"; sourceTree = "<group>"; };
+		A1PDFHLA01F11E01ADD00004 /* PDFHighlightAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PDFHighlightAnnotation.swift"; sourceTree = "<group>"; };
+		A1ANOSTR01F11E01ADD00005 /* AnnotationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AnnotationStore.swift"; sourceTree = "<group>"; };
+		A21AA934B009668FD710E2D0 /* ZoteroModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ZoteroModels.swift"; sourceTree = "<group>"; };
+		BB6CFA76945731E358556D8F /* ZoteroStorageResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ZoteroStorageResolver.swift"; sourceTree = "<group>"; };
+		EB57A96A8324D4F0E3709727 /* ZoteroClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ZoteroClient.swift"; sourceTree = "<group>"; };
+		1E4CC5B794770C73F97674EA /* ZoteroLinkStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ZoteroLinkStore.swift"; sourceTree = "<group>"; };
+		19383E74C73459ABBC3ADC0E /* ZoteroSyncStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ZoteroSyncStore.swift"; sourceTree = "<group>"; };
+		C900C2A9E26A0D123F60917A /* ZoteroStreamingClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ZoteroStreamingClient.swift"; sourceTree = "<group>"; };
+		A1A0E533E9968DE031530EF4 /* ZoteroLinkPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ZoteroLinkPickerView.swift"; sourceTree = "<group>"; };
 		1C0766F9BD6A4D9CBC09404F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info.plist"; sourceTree = "<group>"; };
 		A45CEC6B4D314BC295D733B6 /* OFL.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "OFL.txt"; sourceTree = "<group>"; };
 		678BA4B543004C65A1DA2CB7 /* OpenDyslexic-Regular.otf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "OpenDyslexic-Regular.otf"; sourceTree = "<group>"; };
@@ -82,6 +100,7 @@
 				4654123EC88742D4A61E9ADA /* TTS */,
 				94DFB5AB9EC7466697CEE017 /* Theme */,
 				F318C3748B0249EDAF741C40 /* Views */,
+				74986B4FAA7EA1763964A95A /* Zotero */,
 			);
 			path = AccessibleReader;
 			sourceTree = "<group>";
@@ -108,6 +127,7 @@
 			children = (
 				E559267A79004744833B3CC2 /* DocumentKind.swift */,
 				BD4478B329624985BDF5A41A /* ReadingPreset.swift */,
+				A1PDFHLA01F11E01ADD00004 /* PDFHighlightAnnotation.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -136,6 +156,9 @@
 				A1DOTENV01F11E01ADD00003 /* DotEnv.swift */,
 				A77EC722ABAA474AA94778A7 /* PresetStore.swift */,
 				65E3F45B10A344FCB6C84ED3 /* SettingsStore.swift */,
+				A1ANOSTR01F11E01ADD00005 /* AnnotationStore.swift */,
+				1E4CC5B794770C73F97674EA /* ZoteroLinkStore.swift */,
+				19383E74C73459ABBC3ADC0E /* ZoteroSyncStore.swift */,
 			);
 			path = Stores;
 			sourceTree = "<group>";
@@ -168,8 +191,20 @@
 				385C113D3C4A41B3BBD5BC24 /* KeyCaptureView.swift */,
 				C7F82CC64E8C401E8539E5AD /* ReaderWindowView.swift */,
 				1DFDA6C5C5C44B2288D0EF0A /* ReadingAidsOverlay.swift */,
+				A1A0E533E9968DE031530EF4 /* ZoteroLinkPickerView.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		74986B4FAA7EA1763964A95A /* Zotero */ = {
+			isa = PBXGroup;
+			children = (
+				EB57A96A8324D4F0E3709727 /* ZoteroClient.swift */,
+				A21AA934B009668FD710E2D0 /* ZoteroModels.swift */,
+				BB6CFA76945731E358556D8F /* ZoteroStorageResolver.swift */,
+				C900C2A9E26A0D123F60917A /* ZoteroStreamingClient.swift */,
+			);
+			path = Zotero;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -245,6 +280,15 @@
 				A1PDFEXT01B01F11E01ADD01 /* PDFExtractor.swift in Sources */,
 				A1RDFONT01B01F11E01ADD02 /* ReaderFont.swift in Sources */,
 				A1DOTENV01B01F11E01ADD03 /* DotEnv.swift in Sources */,
+				A1PDFHLA01B01F11E01ADD04 /* PDFHighlightAnnotation.swift in Sources */,
+				A1ANOSTR01B01F11E01ADD05 /* AnnotationStore.swift in Sources */,
+				22F1F0502ACDEDD3C99215FA /* ZoteroModels.swift in Sources */,
+				4CB4C5364ED6563E2E6A01B0 /* ZoteroStorageResolver.swift in Sources */,
+				725111760C0260E0F6A5DC7A /* ZoteroClient.swift in Sources */,
+				9B402C8599CF97A0A2F3B888 /* ZoteroLinkStore.swift in Sources */,
+				A15A5CE5D00DB8355BA47034 /* ZoteroSyncStore.swift in Sources */,
+				A2775E630C58D59315207D4E /* ZoteroStreamingClient.swift in Sources */,
+				3BF0A999505E70C6955CE58A /* ZoteroLinkPickerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -434,8 +434,13 @@ enum PDFExtractor {
         return (raw, plainFallbackHTML(raw))
     }
 
-    /// Text from PDFKit (which orders columns correctly) with styling recovered from
-    /// the content stream and stitched back on by position.
+    /// Text from PDFKit (which orders columns correctly *within* a column) with
+    /// styling recovered from the content stream and stitched back on by
+    /// position. Reading order across columns is re-derived ourselves — see
+    /// `readingOrder(for:bounds:length:)` — since PDFKit's own column-order
+    /// heuristic can jump to the next column early, typically right after a
+    /// heading or bulleted list, silently reading the rest of the current
+    /// column out of place.
     private static func styledAttributedString(for page: PDFPage) -> NSAttributedString? {
         guard let text = page.string, !text.isEmpty else { return nil }
         let runs = PDFContentScanner.runs(for: page).filter { !$0.fontName.isEmpty }
@@ -454,6 +459,9 @@ enum PDFExtractor {
         let lineKeys = byLine.keys.sorted()
 
         let ns = text as NSString
+        let allBounds = (0..<ns.length).map { page.characterBounds(at: $0) }
+        let order = readingOrder(for: page, bounds: allBounds, length: ns.length)
+
         let result = NSMutableAttributedString()
         var pending = ""
         var pendingAttrs: [NSAttributedString.Key: Any]?
@@ -464,9 +472,9 @@ enum PDFExtractor {
             pending = ""
         }
 
-        for i in 0..<ns.length {
+        for i in order {
             let character = ns.substring(with: NSRange(location: i, length: 1))
-            let bounds = page.characterBounds(at: i)
+            let bounds = allBounds[i]
 
             // Whitespace and line breaks have no useful bounds — keep the run going.
             let isBlank = character.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -491,6 +499,127 @@ enum PDFExtractor {
         }
         flush()
         return result
+    }
+
+    /// Re-sequences character indices `0..<length` as "all of column 0 in
+    /// original relative order, then all of column 1 in original relative
+    /// order" when a two-column gutter is detected, otherwise returns them
+    /// unchanged. Whitespace/line-break characters (no usable bounds) inherit
+    /// whichever column the last real character before them landed in, so
+    /// paragraph breaks stay attached to the right side.
+    ///
+    /// This works because PDFKit's own order is only wrong *across* columns —
+    /// within one column it already reads top-to-bottom correctly — so a
+    /// stable partition by column reconstructs proper reading order without
+    /// needing to re-derive line/column geometry from scratch.
+    private static func readingOrder(for page: PDFPage, bounds allBounds: [CGRect], length: Int) -> [Int] {
+        guard let gutter = columnGutter(for: page, bounds: allBounds) else {
+            return Array(0..<length)
+        }
+        var column0: [Int] = []
+        var column1: [Int] = []
+        column0.reserveCapacity(length)
+        var lastColumn = 0
+        for i in 0..<length {
+            let b = allBounds[i]
+            let column: Int
+            if b.isEmpty || b.height <= 0 {
+                column = lastColumn
+            } else {
+                column = b.minX < gutter ? 0 : 1
+                lastColumn = column
+            }
+            if column == 0 { column0.append(i) } else { column1.append(i) }
+        }
+        return column0 + column1
+    }
+
+    /// Detects a single vertical gutter separating two text columns from the
+    /// x-positions of every character with usable bounds: a wide, nearly-empty
+    /// band roughly in the middle of the page, with a substantial share of
+    /// characters on each side (so an image or a page that's merely sparse
+    /// isn't mistaken for a column break). Returns nil — treat as a single
+    /// column, the common case — when none of this holds.
+    private static func columnGutter(for page: PDFPage, bounds allBounds: [CGRect]) -> CGFloat? {
+        let pageWidth = page.bounds(for: .mediaBox).width
+        guard pageWidth > 100 else { return nil }
+
+        let xs = allBounds.filter { !$0.isEmpty && $0.height > 0 }.map(\.minX)
+        // Below this, a page is sparse enough (title page furniture, a
+        // caption-only appendix page) that a "gutter" is more likely noise
+        // than a real column break.
+        guard xs.count >= 600 else { return nil }
+
+        let bucketWidth: CGFloat = max(6, pageWidth / 40)
+        let bucketCount = Int((pageWidth / bucketWidth).rounded(.up)) + 1
+        var counts = [Int](repeating: 0, count: bucketCount)
+        for x in xs {
+            let k = Int((x / bucketWidth).rounded(.down))
+            if counts.indices.contains(k) { counts[k] += 1 }
+        }
+
+        // Margins and figure edges shouldn't be mistaken for a column break —
+        // only look for a gutter roughly in the middle of the page.
+        let loBound = Int((pageWidth * 0.2) / bucketWidth)
+        let hiBound = Int((pageWidth * 0.8) / bucketWidth)
+        guard loBound < hiBound, hiBound < counts.count else { return nil }
+        let central = counts[loBound...hiBound]
+
+        let sortedCentral = central.sorted()
+        let median = CGFloat(sortedCentral[sortedCentral.count / 2])
+        guard median > 0 else { return nil }
+        let quietThreshold = median * 0.45
+
+        // Widest run of quiet buckets within the central band.
+        var bestStart = -1, bestLen = 0
+        var runStart = -1
+        for k in loBound...hiBound {
+            if CGFloat(counts[k]) <= quietThreshold {
+                if runStart < 0 { runStart = k }
+            } else {
+                if runStart >= 0 {
+                    let len = k - runStart
+                    if len > bestLen { bestLen = len; bestStart = runStart }
+                    runStart = -1
+                }
+            }
+        }
+        if runStart >= 0 {
+            let len = hiBound + 1 - runStart
+            if len > bestLen { bestLen = len; bestStart = runStart }
+        }
+        guard bestStart >= 0 else { return nil }
+
+        let gutterMinX = CGFloat(bestStart) * bucketWidth
+        let gutterMaxX = CGFloat(bestStart + bestLen) * bucketWidth
+        guard gutterMaxX - gutterMinX >= 8 else { return nil }
+        let gutter = (gutterMinX + gutterMaxX) / 2
+
+        let leftCount = xs.filter { $0 < gutterMinX }.count
+        let rightCount = xs.filter { $0 > gutterMaxX }.count
+        let minSide = Int(Double(xs.count) * 0.15)
+        guard leftCount >= minSide, rightCount >= minSide else { return nil }
+
+        // The bug this exists to fix has a distinctive signature: PDFKit reads
+        // a column correctly, jumps to the other column once (typically at a
+        // heading or list), and maybe jumps back once for a tail — a handful
+        // of switches in the *original* order. A title-page byline block or
+        // other grid-like layout, where content legitimately alternates sides
+        // many times, looks completely different: dozens of switches. Only
+        // reorder when the low-switch signature actually holds, so a page
+        // that isn't really two stacked full-height columns is left alone
+        // rather than shuffled into something worse.
+        var lastColumn = -1
+        var switches = 0
+        for b in allBounds {
+            guard !b.isEmpty, b.height > 0 else { continue }
+            let column = b.minX < gutter ? 0 : 1
+            if lastColumn != -1, column != lastColumn { switches += 1 }
+            lastColumn = column
+        }
+        guard switches <= 8 else { return nil }
+
+        return gutter
     }
 
     private static func nearestRun(

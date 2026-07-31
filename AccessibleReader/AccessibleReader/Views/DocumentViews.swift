@@ -48,6 +48,13 @@ enum VisualFilters {
     }
 }
 
+/// Bumped to request a new highlight be created from the PDF view's current
+/// text selection — the same "bump a counter, diff it in updateNSView" idiom
+/// as `SearchCommand`.
+struct HighlightCommand: Equatable {
+    var counter: Int = 0
+}
+
 // MARK: - PDF Visual
 
 struct PDFVisualView: NSViewRepresentable {
@@ -58,6 +65,19 @@ struct PDFVisualView: NSViewRepresentable {
     var selection: ReaderSelection?
     var search: SearchCommand = SearchCommand()
     var fitMode: PDFFitMode = .manual
+    /// Stored highlights for this document, pre-filtered by the caller — this
+    /// view never needs to know about document identity or touch any store.
+    var annotations: [PDFHighlightAnnotation] = []
+    var highlightRequest: HighlightCommand = HighlightCommand()
+    var onCreateHighlight: ((Int, String, [CGRect], String?) -> Void)?
+    var onEditHighlight: ((PDFHighlightAnnotation) -> Void)?
+    var onDeleteHighlight: ((UUID) -> Void)?
+    /// The sentence or word window currently being spoken, if TTS is playing —
+    /// shown via `PDFView.highlightedSelections`, a transient rendering-only
+    /// overlay that's independent of `currentSelection`/stored annotations, so
+    /// it can never interfere with manual text selection or highlight creation.
+    var ttsHighlightText: String? = nil
+    var ttsAutoScroll: Bool = true
 
     func makeNSView(context: Context) -> PDFView {
         let view = PDFView()
@@ -66,6 +86,9 @@ struct PDFVisualView: NSViewRepresentable {
         view.document = PDFDocument(data: data)
         view.delegate = context.coordinator
         context.coordinator.selection = selection
+        context.coordinator.onCreateHighlight = onCreateHighlight
+        context.coordinator.onEditHighlight = onEditHighlight
+        context.coordinator.onDeleteHighlight = onDeleteHighlight
         NotificationCenter.default.addObserver(
             context.coordinator,
             selector: #selector(Coordinator.pageChanged(_:)),
@@ -78,15 +101,30 @@ struct PDFVisualView: NSViewRepresentable {
             name: Notification.Name.PDFViewSelectionChanged,
             object: view
         )
+        let click = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleClick(_:)))
+        // NSClickGestureRecognizer defaults to delaying primary mouse-button
+        // events until it has failed to recognize a click — which, left on,
+        // holds back the exact mouseDown/mouseDragged sequence PDFView's own
+        // click-and-drag text selection relies on internally. With it on,
+        // dragging to select text (what highlight creation depends on) is
+        // broken or badly delayed; this opts back out so the recognizer only
+        // observes clicks without gating PDFView's native mouse handling.
+        click.delaysPrimaryMouseButtonEvents = false
+        view.addGestureRecognizer(click)
         apply(preset, to: view)
         if let goToPage, let page = view.document?.page(at: goToPage) {
             view.go(to: page)
         }
+        context.coordinator.lastAnnotations = annotations
+        if let doc = view.document { PDFHighlightRendering.apply(annotations, to: doc) }
         return view
     }
 
     func updateNSView(_ view: PDFView, context: Context) {
         context.coordinator.selection = selection
+        context.coordinator.onCreateHighlight = onCreateHighlight
+        context.coordinator.onEditHighlight = onEditHighlight
+        context.coordinator.onDeleteHighlight = onDeleteHighlight
         if view.document == nil {
             view.document = PDFDocument(data: data)
         }
@@ -98,6 +136,19 @@ struct PDFVisualView: NSViewRepresentable {
         if context.coordinator.lastSearch != search {
             context.coordinator.lastSearch = search
             context.coordinator.runSearch(search, in: view)
+        }
+        if context.coordinator.lastAnnotations != annotations {
+            context.coordinator.lastAnnotations = annotations
+            context.coordinator.refreshHighlights(in: view, annotations: annotations)
+        }
+        if context.coordinator.lastHighlightRequest.counter != highlightRequest.counter {
+            context.coordinator.lastHighlightRequest = highlightRequest
+            context.coordinator.createHighlightFromSelection(in: view)
+        }
+        let ttsText = ttsHighlightText ?? ""
+        if context.coordinator.lastTTSHighlight != ttsText {
+            context.coordinator.lastTTSHighlight = ttsText
+            context.coordinator.applyTTSHighlight(ttsHighlightText, autoScroll: ttsAutoScroll, currentPage: currentPage, in: view)
         }
     }
 
@@ -128,6 +179,14 @@ struct PDFVisualView: NSViewRepresentable {
         @Binding var currentPage: Int
         var selection: ReaderSelection?
         var lastSearch = SearchCommand()
+        var lastAnnotations: [PDFHighlightAnnotation] = []
+        var lastHighlightRequest = HighlightCommand()
+        var onCreateHighlight: ((Int, String, [CGRect], String?) -> Void)?
+        var onEditHighlight: ((PDFHighlightAnnotation) -> Void)?
+        var onDeleteHighlight: ((UUID) -> Void)?
+        var lastTTSHighlight: String = ""
+        private var editorPopover: NSPopover?
+        private var openEditorAnnotationID: UUID?
 
         init(currentPage: Binding<Int>) { _currentPage = currentPage }
 
@@ -154,6 +213,207 @@ struct PDFVisualView: NSViewRepresentable {
             view.setCurrentSelection(found, animate: true)
             view.go(to: found)
         }
+
+        func refreshHighlights(in view: PDFView, annotations: [PDFHighlightAnnotation]) {
+            guard let doc = view.document else { return }
+            // A remote edit (synced in via ZoteroSyncStore, e.g. from the streaming
+            // socket) landing on the exact highlight whose editor popover is open would
+            // otherwise go unnoticed — the popover's `comment`/`colorHex` were captured
+            // once at `showEditor` time, so hitting "Done" after this would silently
+            // clobber the just-arrived remote change. Close it instead; it's already
+            // `.transient` so this is consistent with how it already dismisses.
+            if let openID = openEditorAnnotationID {
+                // NSViewRepresentable's update path always runs on the main thread;
+                // `ZoteroSyncStore` is main-actor-isolated but this method itself isn't.
+                let remotelyChanged = MainActor.assumeIsolated { ZoteroSyncStore.shared.lastRemoteChangeIDs.contains(openID) }
+                if remotelyChanged {
+                    editorPopover?.close()
+                    openEditorAnnotationID = nil
+                }
+            }
+            PDFHighlightRendering.apply(annotations, to: doc)
+            // PDFView does not reliably redraw a page on its own after
+            // annotations are added/removed programmatically — without this,
+            // a highlight could exist on the page model but not actually
+            // appear until some unrelated interaction forced a redraw.
+            view.layoutDocumentView()
+        }
+
+        /// Shows the sentence/word window currently being spoken via
+        /// `highlightedSelections` — a search-result-style overlay distinct from
+        /// `currentSelection`, so it never touches the real text selection or the
+        /// stored-highlight creation flow. `autoScroll` mirrors the reflow view's
+        /// "only jump the page when following speech is wanted" preference.
+        func applyTTSHighlight(_ text: String?, autoScroll: Bool, currentPage: Int, in view: PDFView) {
+            guard let doc = view.document else { return }
+            let marker = String((text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(60))
+            guard !marker.isEmpty else {
+                view.highlightedSelections = nil
+                return
+            }
+            let matches = doc.findString(marker, withOptions: [.caseInsensitive])
+            guard let best = matches.first(where: { sel in
+                sel.pages.first.map { doc.index(for: $0) >= currentPage } ?? false
+            }) ?? matches.first else {
+                view.highlightedSelections = nil
+                return
+            }
+            view.highlightedSelections = [best]
+            if autoScroll {
+                keepFollowedAlong(best, in: view)
+            }
+        }
+
+        /// Pins the read-aloud selection just above vertical center in the
+        /// viewport, teleprompter-style, instead of `PDFView.go(to:)`'s default
+        /// behavior of performing the smallest scroll that makes the selection
+        /// visible at all — which could leave it sitting right at the bottom edge.
+        /// Scrolls the underlying clip view directly (rather than approximating
+        /// via a `PDFDestination`) so the target lands at a precise fraction of
+        /// the viewport, and is gated by a small hysteresis band so word-by-word
+        /// highlight updates (word-window mode) don't retrigger a scroll on every
+        /// single word once the selection is already near the target line.
+        private func keepFollowedAlong(_ selection: PDFSelection, in view: PDFView) {
+            guard let page = selection.pages.first,
+                  let clipView = view.documentView?.enclosingScrollView?.contentView
+            else {
+                view.go(to: selection)
+                return
+            }
+            let viewBounds = view.convert(selection.bounds(for: page), from: page)
+            let targetY = view.bounds.height * 0.42
+            let delta = viewBounds.midY - targetY
+            guard abs(delta) > 24 else { return }
+
+            var origin = clipView.bounds.origin
+            origin.y += delta
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.3
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                clipView.animator().setBoundsOrigin(origin)
+            } completionHandler: {
+                view.documentView?.enclosingScrollView?.reflectScrolledClipView(clipView)
+            }
+        }
+
+        /// Turns the view's current text selection into a new stored highlight
+        /// (via `onCreateHighlight`) rather than building the `PDFAnnotation`
+        /// here directly — the new record round-trips back down through
+        /// `annotations` and is placed by the same `refreshHighlights` path as
+        /// every other highlight, so there is exactly one placement path.
+        /// Geometry (`rects`) is captured from the live selection right now,
+        /// rather than re-derived later by searching for the text — a
+        /// multi-line selection does not reliably round-trip through
+        /// `PDFDocument.findString`, which put the highlight (and the popover
+        /// anchored to it) in the wrong place.
+        func createHighlightFromSelection(in view: PDFView) {
+            guard let doc = view.document,
+                  let selection = view.currentSelection,
+                  let page = selection.pages.first,
+                  let text = selection.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return }
+            let rects = PDFHighlightRendering.rects(for: selection, on: page)
+            guard !rects.isEmpty else { return }
+            onCreateHighlight?(doc.index(for: page), text, rects, page.label)
+        }
+
+        /// Opens the highlight editor when a click lands on an existing
+        /// highlight. Deliberately does *not* clear `view.currentSelection` on
+        /// a miss — this recognizer can still fire at the tail end of a short
+        /// drag-select, and clearing the selection here raced with
+        /// `createHighlightFromSelection` reading it right after, silently
+        /// dropping the selection a highlight was about to be made from.
+        /// `PDFView` already deselects natively on a plain click elsewhere.
+        @objc func handleClick(_ gesture: NSClickGestureRecognizer) {
+            guard let view = gesture.view as? PDFView else { return }
+            let point = gesture.location(in: view)
+            guard let page = view.page(for: point, nearest: false) else { return }
+            let pagePoint = view.convert(point, to: page)
+            guard let hit = PDFHighlightRendering.managedAnnotation(at: pagePoint, on: page),
+                  let id = PDFHighlightRendering.recordID(for: hit),
+                  let record = lastAnnotations.first(where: { $0.id == id })
+            else { return }
+            showEditor(for: record, near: hit.bounds, on: page, in: view)
+        }
+
+        private func showEditor(for record: PDFHighlightAnnotation, near pageBounds: CGRect, on page: PDFPage, in view: PDFView) {
+            editorPopover?.close()
+            let anchorRect = view.convert(pageBounds, from: page)
+            let editor = HighlightEditorView(
+                annotation: record,
+                onSave: { [weak self] updated in
+                    self?.onEditHighlight?(updated)
+                    self?.editorPopover?.close()
+                    self?.openEditorAnnotationID = nil
+                },
+                onDelete: { [weak self] in
+                    self?.onDeleteHighlight?(record.id)
+                    self?.editorPopover?.close()
+                    self?.openEditorAnnotationID = nil
+                }
+            )
+            let controller = NSHostingController(rootView: editor)
+            let popover = NSPopover()
+            popover.contentViewController = controller
+            popover.behavior = .transient
+            popover.show(relativeTo: anchorRect, of: view, preferredEdge: .maxY)
+            editorPopover = popover
+            openEditorAnnotationID = record.id
+        }
+    }
+}
+
+/// Small editor shown in a popover when clicking an existing highlight:
+/// change its color or comment, or delete it.
+struct HighlightEditorView: View {
+    let annotation: PDFHighlightAnnotation
+    var onSave: (PDFHighlightAnnotation) -> Void
+    var onDelete: () -> Void
+
+    @State private var comment: String
+    @State private var colorHex: String
+
+    init(annotation: PDFHighlightAnnotation, onSave: @escaping (PDFHighlightAnnotation) -> Void, onDelete: @escaping () -> Void) {
+        self.annotation = annotation
+        self.onSave = onSave
+        self.onDelete = onDelete
+        _comment = State(initialValue: annotation.comment)
+        _colorHex = State(initialValue: annotation.color)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                ForEach(HighlightSwatches.all) { swatch in
+                    Circle()
+                        .fill(Color(hex: swatch.hex) ?? .yellow)
+                        .frame(width: 22, height: 22)
+                        .overlay(
+                            Circle().strokeBorder(
+                                PaperTheme.accent,
+                                lineWidth: colorHex.uppercased() == swatch.hex.uppercased() ? 2.5 : 0
+                            )
+                        )
+                        .onTapGesture { colorHex = swatch.hex }
+                }
+            }
+            TextEditor(text: $comment)
+                .font(.system(size: 12))
+                .frame(width: 220, height: 70)
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(PaperTheme.stroke, lineWidth: 1))
+            HStack {
+                Button("Delete", role: .destructive, action: onDelete)
+                Spacer()
+                Button("Done") {
+                    var updated = annotation
+                    updated.comment = comment
+                    updated.color = colorHex
+                    onSave(updated)
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(14)
     }
 }
 
@@ -164,6 +424,7 @@ struct WebContentView: NSViewRepresentable {
     let baseURL: URL?
     var preset: ReadingPreset
     var highlightSentence: String?
+    var autoScroll: Bool = true
     var scrollToPage: Int? = nil
     var onVisiblePage: ((Int) -> Void)? = nil
     var selection: ReaderSelection?
@@ -205,9 +466,10 @@ struct WebContentView: NSViewRepresentable {
         }
 
         let sentence = highlightSentence ?? ""
-        if coordinator.lastHighlight != sentence {
+        if coordinator.lastHighlight != sentence || coordinator.lastAutoScroll != autoScroll {
             coordinator.lastHighlight = sentence
-            coordinator.applyHighlight(sentence, in: view)
+            coordinator.lastAutoScroll = autoScroll
+            coordinator.applyHighlight(sentence, autoScroll: autoScroll, in: view)
         }
 
         if coordinator.lastSearch != search {
@@ -231,6 +493,7 @@ struct WebContentView: NSViewRepresentable {
         var pendingScrollPage: Int?
         var lastScrolledPage: Int?
         var lastHighlight: String = ""
+        var lastAutoScroll: Bool = true
         var lastSearch = SearchCommand()
         var isLoaded = false
         var onVisiblePage: ((Int) -> Void)?
@@ -256,7 +519,7 @@ struct WebContentView: NSViewRepresentable {
                 pendingScrollPage = nil
             }
             if !lastHighlight.isEmpty {
-                applyHighlight(lastHighlight, in: webView)
+                applyHighlight(lastHighlight, autoScroll: lastAutoScroll, in: webView)
             }
         }
 
@@ -268,10 +531,10 @@ struct WebContentView: NSViewRepresentable {
             )
         }
 
-        func applyHighlight(_ sentence: String, in webView: WKWebView) {
+        func applyHighlight(_ sentence: String, autoScroll: Bool, in webView: WKWebView) {
             guard isLoaded else { return }
             webView.evaluateJavaScript(
-                "window.__readerHighlight && window.__readerHighlight(\(jsLiteral(sentence)));",
+                "window.__readerHighlight && window.__readerHighlight(\(jsLiteral(sentence)), \(autoScroll));",
                 completionHandler: nil
             )
         }
@@ -323,7 +586,31 @@ struct WebContentView: NSViewRepresentable {
               p.normalize();
             });
           }
-          window.__readerHighlight = function (text) {
+          // Keeps the actively-read text pinned just above vertical center, like a
+          // teleprompter, rather than only correcting once it has scrolled fully
+          // out of view. A single persistent rAF loop eases toward the target
+          // each frame; restarting it on every highlight update (as opposed to
+          // firing a fresh `scrollIntoView` animation per call) means rapid
+          // word-by-word updates in word-window mode glide continuously instead
+          // of fighting a stack of overlapping smooth-scroll animations.
+          var FOLLOW_TARGET_FRACTION = 0.42;
+          var followRAF = null;
+          function followAlong(mark) {
+            var scroller = document.scrollingElement || document.documentElement;
+            function step() {
+              var r = mark.getBoundingClientRect();
+              var current = r.top + r.height / 2;
+              var target = window.innerHeight * FOLLOW_TARGET_FRACTION;
+              var delta = current - target;
+              if (Math.abs(delta) < 1) { followRAF = null; return; }
+              scroller.scrollTop += delta * 0.2;
+              followRAF = requestAnimationFrame(step);
+            }
+            followRAF = requestAnimationFrame(step);
+          }
+
+          window.__readerHighlight = function (text, autoScroll) {
+            if (followRAF) { cancelAnimationFrame(followRAF); followRAF = null; }
             clearMarks();
             if (!text) return;
             var walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -337,12 +624,7 @@ struct WebContentView: NSViewRepresentable {
               var mark = document.createElement('mark');
               mark.className = 'tts-current';
               try { range.surroundContents(mark); } catch (e) { return; }
-              // Only scroll when it has actually left the viewport, so deliberate
-              // manual scrolling during playback is not constantly overridden.
-              var r = mark.getBoundingClientRect();
-              if (r.top < 0 || r.bottom > window.innerHeight) {
-                mark.scrollIntoView({ block: 'center', behavior: 'smooth' });
-              }
+              if (autoScroll) followAlong(mark);
               return;
             }
           };
@@ -449,6 +731,7 @@ struct ExtractedTextView: View {
     var preset: ReadingPreset
     @Binding var currentPage: Int
     var highlightSentence: String
+    var autoScroll: Bool = true
     var selection: ReaderSelection?
     var goToPage: Int? = nil
     var search: SearchCommand = SearchCommand()
@@ -470,6 +753,7 @@ struct ExtractedTextView: View {
             baseURL: Bundle.main.resourceURL,
             preset: preset,
             highlightSentence: highlightSentence.isEmpty ? nil : highlightSentence,
+            autoScroll: autoScroll,
             scrollToPage: goToPage,
             onVisiblePage: { page in
                 if currentPage != page { currentPage = page }

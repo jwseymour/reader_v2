@@ -56,6 +56,9 @@ struct ReadingPreset: Identifiable, Codable, Equatable, Hashable {
     // still decode — see `effectiveTTSHighlightMode` / `effectiveTTSHighlightWindowSize`.
     var ttsHighlightMode: TTSHighlightMode?
     var ttsHighlightWindowSize: Int?
+    /// Whether the page auto-scrolls to keep the spoken text in view, or stays
+    /// independent of playback so manual scrolling is never overridden.
+    var ttsAutoScrollEnabled: Bool?
 
     init(
         id: UUID = UUID(),
@@ -108,6 +111,7 @@ struct ReadingPreset: Identifiable, Codable, Equatable, Hashable {
         self.openAIVoice = "nova"
         self.ttsHighlightMode = .sentence
         self.ttsHighlightWindowSize = 2
+        self.ttsAutoScrollEnabled = true
     }
 
     static var starter: ReadingPreset {
@@ -133,6 +137,7 @@ extension ReadingPreset {
     var rulerColor: Color { Color(hex: rulerColorHex) ?? .brown }
     var effectiveTTSHighlightMode: TTSHighlightMode { ttsHighlightMode ?? .sentence }
     var effectiveTTSHighlightWindowSize: Int { ttsHighlightWindowSize ?? 2 }
+    var effectiveTTSAutoScrollEnabled: Bool { ttsAutoScrollEnabled ?? true }
 }
 
 extension Color {

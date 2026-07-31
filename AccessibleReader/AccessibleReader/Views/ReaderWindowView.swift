@@ -9,6 +9,9 @@ struct ReaderWindowView: View {
 
     @ObservedObject private var presets = PresetStore.shared
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var annotationStore = AnnotationStore.shared
+    @ObservedObject private var zoteroSync = ZoteroSyncStore.shared
+    @ObservedObject private var zoteroLinks = ZoteroLinkStore.shared
     @StateObject private var tts = TTSController()
     @StateObject private var selection = ReaderSelection()
 
@@ -36,6 +39,9 @@ struct ReaderWindowView: View {
     @State private var showPalette = false
     @State private var showShortcutsGuide = false
     @State private var jumpPage: Int?
+    @State private var highlightRequest = HighlightCommand()
+    @State private var showExportConfirm = false
+    @State private var exportResultMessage: String?
 
     enum CompareMode { case off, sideBySide }
 
@@ -46,6 +52,14 @@ struct ReaderWindowView: View {
             return b
         }
         return presets.activePreset
+    }
+
+    /// Highlights are keyed by the source file's own path (see
+    /// `AnnotationStore`/`PDFHighlightAnnotation`) — renaming or moving the
+    /// file orphans its highlights, an accepted v1 limitation.
+    private var annotationDocKey: String? { fileURL?.standardizedFileURL.path }
+    private var currentAnnotations: [PDFHighlightAnnotation] {
+        annotationDocKey.map { annotationStore.list(for: $0) } ?? []
     }
 
     var body: some View {
@@ -77,8 +91,19 @@ struct ReaderWindowView: View {
                 InspectorPanel(
                     presets: presets,
                     settings: settings,
+                    zoteroSync: zoteroSync,
+                    zoteroLinks: zoteroLinks,
                     showOriginalPDF: $showOriginalPDF,
-                    kind: kind
+                    kind: kind,
+                    documentKey: annotationDocKey,
+                    annotations: currentAnnotations,
+                    onJumpToAnnotation: { page in goToPage(page) },
+                    onDeleteAnnotation: { id in
+                        let record = currentAnnotations.first { $0.id == id }
+                        annotationStore.delete(id)
+                        if let record { Task { await zoteroSync.pushDelete(record) } }
+                    },
+                    onExportRequested: { handle(.exportHighlightsToPDF) }
                 )
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
@@ -120,6 +145,25 @@ struct ReaderWindowView: View {
         }
         .sheet(isPresented: $showShortcutsGuide) {
             ShortcutsGuideView()
+        }
+        .alert("Export Highlights to PDF?", isPresented: $showExportConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Export & Overwrite", role: .destructive) { exportHighlightsToPDF() }
+        } message: {
+            Text("""
+            This permanently rewrites "\(fileURL?.lastPathComponent ?? "this file")" on disk, embedding \
+            \(currentAnnotations.count) highlight(s) as real PDF annotations. If this file is open in \
+            Zotero, close it there first. Afterward, use Zotero's File \u{2192} Import Annotations on \
+            this same file — only highlight-type annotations import reliably.
+            """)
+        }
+        .alert("Export Highlights", isPresented: Binding(
+            get: { exportResultMessage != nil },
+            set: { if !$0 { exportResultMessage = nil } }
+        )) {
+            Button("OK") { exportResultMessage = nil }
+        } message: {
+            Text(exportResultMessage ?? "")
         }
         .background(KeyCaptureView(onEvent: { event in
             handleKeyEvent(event)
@@ -195,6 +239,18 @@ struct ReaderWindowView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(PaperTheme.accentSoft)
+                .clipShape(Capsule())
+            } else if !tts.statusMessage.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9))
+                    Text(tts.statusMessage)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                }
+                .foregroundStyle(PaperTheme.warning)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(PaperTheme.warning.opacity(0.12))
                 .clipShape(Capsule())
             }
         }
@@ -390,7 +446,34 @@ struct ReaderWindowView: View {
                     goToPage: jumpPage,
                     selection: selection,
                     search: search,
-                    fitMode: fitMode
+                    fitMode: fitMode,
+                    annotations: currentAnnotations,
+                    highlightRequest: highlightRequest,
+                    onCreateHighlight: { pageIndex, text, rects, pageLabel in
+                        guard let key = annotationDocKey else { return }
+                        let record = PDFHighlightAnnotation(
+                            documentKey: key,
+                            pageIndex: pageIndex,
+                            matchText: text,
+                            comment: "",
+                            color: HighlightSwatches.defaultHex,
+                            rects: rects,
+                            pageLabel: pageLabel
+                        )
+                        annotationStore.add(record)
+                        Task { await zoteroSync.pushCreate(record) }
+                    },
+                    onEditHighlight: { updated in
+                        annotationStore.update(updated)
+                        Task { await zoteroSync.pushUpdate(updated) }
+                    },
+                    onDeleteHighlight: { id in
+                        let record = currentAnnotations.first { $0.id == id }
+                        annotationStore.delete(id)
+                        if let record { Task { await zoteroSync.pushDelete(record) } }
+                    },
+                    ttsHighlightText: tts.currentHighlight,
+                    ttsAutoScroll: preset.effectiveTTSAutoScrollEnabled
                 )
                 .onChange(of: jumpPage) { _, _ in jumpPage = nil }
             } else {
@@ -399,6 +482,7 @@ struct ReaderWindowView: View {
                     preset: preset,
                     currentPage: $currentPage,
                     highlightSentence: tts.currentHighlight,
+                    autoScroll: preset.effectiveTTSAutoScrollEnabled,
                     selection: selection,
                     goToPage: jumpPage,
                     search: search
@@ -413,6 +497,7 @@ struct ReaderWindowView: View {
                     baseURL: ch.baseURL,
                     preset: preset,
                     highlightSentence: tts.currentHighlight,
+                    autoScroll: preset.effectiveTTSAutoScrollEnabled,
                     selection: selection,
                     search: search
                 )
@@ -425,6 +510,7 @@ struct ReaderWindowView: View {
                 baseURL: htmlBase ?? fileURL?.deletingLastPathComponent(),
                 preset: preset,
                 highlightSentence: tts.currentHighlight,
+                autoScroll: preset.effectiveTTSAutoScrollEnabled,
                 selection: selection,
                 search: search
             )
@@ -594,6 +680,14 @@ struct ReaderWindowView: View {
                 shortcut: binding.symbol,
                 action: { handle(binding.command) }
             ))
+            // Appended here, not after the loop, so it stays contiguous with
+            // "Add Highlight" under the same "Annotations" group header
+            // rather than showing as a second, separate section.
+            if binding.command == .addHighlight {
+                items.append(CommandPaletteItem(title: "Export Highlights to PDF…", group: "Annotations", shortcut: nil) {
+                    handle(.exportHighlightsToPDF)
+                })
+            }
         }
         items.append(contentsOf: [
             CommandPaletteItem(title: "Set Compare Preset B = Active", group: "Presets & Compare", shortcut: nil) {
@@ -616,7 +710,6 @@ struct ReaderWindowView: View {
         // OPENAI_TTS_VOICE used to be written into the active preset on every open,
         // silently overwriting whatever voice had been chosen in the inspector.
         tts.speed = presets.activePreset.ttsSpeed
-        tts.useOpenAI = presets.activePreset.ttsPreferOpenAI
 
         switch kind {
         case .pdf:
@@ -624,6 +717,9 @@ struct ReaderWindowView: View {
             extractionFailed = !PDFExtractor.extractionLooksViable(extractedPages)
             if extractionFailed { showOriginalPDF = true }
             tts.load(paragraphs: TTSTextSplitter.paragraphs(from: extractedPages))
+            if let fileURL, let key = annotationDocKey {
+                Task { await zoteroSync.resolveLink(documentKey: key, fileURL: fileURL) }
+            }
         case .epub:
             do {
                 epub = try EPUBLoader.load(from: document.data)
@@ -656,7 +752,6 @@ struct ReaderWindowView: View {
 
     private func toggleTTS() {
         tts.speed = displayPreset.ttsSpeed
-        tts.useOpenAI = displayPreset.ttsPreferOpenAI
         tts.togglePlayPause(selection: selection.text, currentPage: currentPage)
     }
 
@@ -697,6 +792,10 @@ struct ReaderWindowView: View {
         case .rulerNudgeUp: focusY = max(20, focusY - 20)
         case .rulerNudgeDown: focusY += 20
         case .toggleShortcutsGuide: showShortcutsGuide = true
+        case .addHighlight:
+            if kind == .pdf, showOriginalPDF || extractionFailed { highlightRequest.counter += 1 }
+        case .exportHighlightsToPDF:
+            if kind == .pdf, !currentAnnotations.isEmpty { showExportConfirm = true }
         }
     }
 
@@ -767,6 +866,42 @@ struct ReaderWindowView: View {
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url, let data = try? Data(contentsOf: url) {
             _ = try? presets.importPreset(from: data)
+        }
+    }
+
+    /// Rewrites the source PDF on disk with every stored highlight embedded as a real
+    /// PDF highlight annotation, so Zotero's own File → Import Annotations can pick
+    /// them up. Fallback path only, for documents `ZoteroSyncStore` couldn't link to a
+    /// Zotero item (see `ZoteroLinkStore`) — a linked document syncs live instead; the
+    /// Inspector only shows this button when unlinked, to avoid double-writing.
+    /// Always re-derives the embedded annotations from `AnnotationStore` rather than
+    /// trusting what's already in the file, since Zotero strips them back out of the
+    /// file once it has imported them.
+    private func exportHighlightsToPDF() {
+        guard kind == .pdf, let fileURL, let key = annotationDocKey else { return }
+        let records = annotationStore.list(for: key)
+        guard !records.isEmpty, let pdf = PDFDocument(url: fileURL) else {
+            exportResultMessage = "Couldn't open the PDF to export into."
+            return
+        }
+        let unplaced = PDFHighlightRendering.apply(records, to: pdf)
+        let tempURL = fileURL.deletingLastPathComponent()
+            .appendingPathComponent(".\(fileURL.lastPathComponent).artmp")
+        guard pdf.write(to: tempURL) else {
+            exportResultMessage = "Export failed — the PDF could not be written."
+            return
+        }
+        do {
+            _ = try FileManager.default.replaceItem(
+                at: fileURL, withItemAt: tempURL, backupItemName: nil, options: [], resultingItemURL: nil
+            )
+            let placed = records.count - unplaced
+            exportResultMessage = unplaced > 0
+                ? "Exported \(placed) highlight(s); \(unplaced) couldn't be located and were skipped."
+                : "Exported \(placed) highlight(s)."
+        } catch {
+            try? FileManager.default.removeItem(at: tempURL)
+            exportResultMessage = "Export failed: \(error.localizedDescription)"
         }
     }
 }

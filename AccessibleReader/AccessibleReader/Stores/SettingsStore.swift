@@ -12,6 +12,7 @@ final class SettingsStore: ObservableObject {
     private let keychainService = "com.jack.AccessibleReaderV2"
     private let keychainAccount = "openai-api-key"
     private let manualKeyKey = "openAIKeyOverridesEnv"
+    private let zoteroKeychainAccount = "zotero-api-key"
 
     /// Where the active OpenAI key came from — surfaced in the inspector so a stale
     /// Keychain entry can never silently shadow the key in `.env.local`.
@@ -71,6 +72,21 @@ final class SettingsStore: ObservableObject {
     /// From .env `OPENAI_TTS_MODEL`, defaulting to high-quality speech.
     @Published var openAITTSModel: String = "tts-1-hd"
 
+    /// Keychain-only — deliberately does NOT follow `openAIAPIKey`'s `.env`-can-override
+    /// pattern. That dual-source design exists for local dev convenience, but this repo
+    /// already had one `.env` file accidentally committed and a key revoked over it; a
+    /// second credential doesn't need to repeat that surface.
+    @Published var zoteroAPIKey: String = "" {
+        didSet {
+            guard !isBootstrapping, zoteroAPIKey != oldValue else { return }
+            saveSecret(zoteroAPIKey, account: zoteroKeychainAccount)
+            zoteroAPIKeyRejected = false
+            ZoteroSyncStore.shared.configure(apiKey: zoteroAPIKey)
+        }
+    }
+    /// Set when Zotero rejects the key (401), mirroring `apiKeyRejected`.
+    @Published var zoteroAPIKeyRejected = false
+
     private init() {
         DotEnv.load()
 
@@ -107,7 +123,9 @@ final class SettingsStore: ObservableObject {
         if let model = DotEnv.value("OPENAI_TTS_MODEL"), !model.isEmpty {
             openAITTSModel = model
         }
+        zoteroAPIKey = loadSecret(account: zoteroKeychainAccount)
         isBootstrapping = false
+        ZoteroSyncStore.shared.configure(apiKey: zoteroAPIKey)
     }
 
     /// Called when OpenAI rejects the current key (401). If a *different* key is
@@ -128,24 +146,32 @@ final class SettingsStore: ObservableObject {
     }
 
     private func saveAPIKey(_ key: String) {
-        let data = Data(key.utf8)
+        saveSecret(key, account: keychainAccount)
+    }
+
+    private func loadAPIKey() -> String {
+        loadSecret(account: keychainAccount)
+    }
+
+    private func saveSecret(_ value: String, account: String) {
+        let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: keychainAccount
+            kSecAttrAccount as String: account
         ]
         SecItemDelete(query as CFDictionary)
-        guard !key.isEmpty else { return }
+        guard !value.isEmpty else { return }
         var add = query
         add[kSecValueData as String] = data
         SecItemAdd(add as CFDictionary, nil)
     }
 
-    private func loadAPIKey() -> String {
+    private func loadSecret(account: String) -> String {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: keychainAccount,
+            kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
