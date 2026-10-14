@@ -4,6 +4,8 @@ A native macOS reader for academic papers, built for readers with **dyslexia, AD
 
 > Built with SwiftUI, PDFKit, and AppKit · macOS 14+ · ~7,000 lines of Swift
 
+![Accessible Reader showing dim-surround and colour overlay on a sample paper](docs/screenshot.png)
+
 ## Why
 
 Most PDF readers are optimised for annotation and library management, not for comfortable reading. I built this for my own needs: research papers are dense enough without fighting the page. The app stays out of the way and lets me tune the reading surface until it's quiet enough to keep going.
