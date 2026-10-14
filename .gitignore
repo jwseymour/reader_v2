@@ -12,3 +12,6 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 *.xcworkspace/xcuserdata/
+
+# Local tooling
+.claude/
